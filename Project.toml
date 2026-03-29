@@ -1,0 +1,15 @@
+name = "SamplesCore"
+uuid = "7e48b2a1-39c4-4d51-8e95-9d3278c7b89b"
+authors = ["Manuel Jenkin Jerome <mj2984@columbia.edu>"]
+version = "0.1.0"
+description = "Core types for signal samples (including audio) and fixed-point signal processing."
+license = "MIT"
+
+[deps]
+BitIntegers = "c3b6d118-76ef-56ca-8cc7-ebb389d030a1"
+FixedPointNumbers = "53c48c17-4a7d-5ca2-90c5-79b7896eea93"
+
+[compat]
+julia = "1.8"
+BitIntegers = "0.3"
+FixedPointNumbers = "0.8"
