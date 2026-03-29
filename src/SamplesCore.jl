@@ -1,5 +1,4 @@
 module SamplesCore
-
 using BitIntegers, FixedPointNumbers
 import Base: +, -, *, /, show, eltype, promote_rule, broadcastable, getproperty
 import Base: zero
@@ -65,7 +64,6 @@ rawview(A::AbstractArray{Fixed{T, f}}) where {T, f} = reinterpret(T, A)
 # Formatting
 show(io::IO, x::Q0f23) = print(io, Float64(x), "Q0f23")
 show(io::IO, c::Sample{N, T}) where {N, T} = print(io, N==2 ? "Stereo{$T}" : "Sample{$N,$T}", "(", join(c.data, ", "), ")")
-
 end
 #=
 Other Data Types: This is perfect for:
