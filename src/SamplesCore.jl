@@ -31,10 +31,14 @@ const Mono{T}   = T
 (::Type{Sample{N, T}})(args...) where {N, T} = Sample{N, T}(ntuple(i -> T(args[i]), N))
 
 # Property access for Stereo (e.g., sample.l, sample.r)
-function getproperty(c::Sample{2, T}, s::Symbol) where T
-    s === :l && return getfield(c, :data)[1]
-    s === :r && return getfield(c, :data)[2]
-    return getfield(c, s)
+@inline function Base.getproperty(c::Sample{2, T}, s::Symbol) where T
+    if s === :l
+        return getfield(c, :data)[1]
+    elseif s === :r
+        return getfield(c, :data)[2]
+    else
+        return getfield(c, s)
+    end
 end
 
 eltype(::Type{Sample{N, T}}) where {N, T} = T
