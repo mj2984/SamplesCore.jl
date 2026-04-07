@@ -1,41 +1,52 @@
-abstract type AbstractSampleArray{T,N} <: AbstractArray{T,N} end
+############################
+# Core domain array types  #
+############################
+
+abstract type AbstractDomainArray{T,N} <: AbstractArray{T,N} end
 
 """
-    SampleArray{T,N,A,R}
+    DomainArray{T,N,A,R}
 
 Wrapper around an `AbstractArray{T,N}` with per-dimension sampling rates.
 
 - `A` is the underlying array type
 - `R` is `NTuple{N,Union{Nothing,Real}}`
-  - `Real`   → this dimension is time-indexed
-  - `Nothing` → this dimension is sample-indexed
+  - `Real`    → this dimension is domain-indexed (e.g. time)
+  - `Nothing` → this dimension is sample-indexed (plain integer axis)
 """
-struct SampleArray{T,N,A<:AbstractArray{T,N},R<:NTuple{N,Union{Nothing,Real}}} <: AbstractSampleArray{T,N}
-    sample::A
+struct DomainArray{T,N,A<:AbstractArray{T,N},R<:NTuple{N,Union{Nothing,Real}}} <: AbstractDomainArray{T,N}
+    data::A
     rate::R
 end
 
 """
-    SampleView{T,N,A,R,O}
+    DomainView{T,N,A,R,O}
 
-View of a `SampleArray` that:
+View of a `DomainArray` that:
 
 - wraps a `SubArray`
 - preserves sampling rates
-- tracks accumulated time offsets per dimension
+- tracks accumulated domain offsets per dimension
 """
-struct SampleView{T,N,A<:AbstractArray{T,N},
+struct DomainView{T,N,A<:AbstractArray{T,N},
                   R<:NTuple{N,Union{Nothing,Real}},
-                  O<:NTuple{N,Float64}} <: AbstractSampleArray{T,N}
-    sample::A
+                  O<:NTuple{N,Float64}} <: AbstractDomainArray{T,N}
+    data::A
     rate::R
     offset::O
 end
 
-Base.IndexStyle(::Type{<:AbstractSampleArray}) = IndexStyle(Array)
-Base.size(S::AbstractSampleArray) = size(S.sample)
-Base.axes(S::AbstractSampleArray) = axes(S.sample)
-Base.eltype(::Type{<:AbstractSampleArray{T}}) where T = T
+########################
+# Array interface      #
+########################
+
+Base.IndexStyle(::Type{<:AbstractDomainArray}) = IndexLinear()
+Base.size(D::AbstractDomainArray) = size(D.data)
+Base.eltype(::Type{<:AbstractDomainArray{T}}) where T = T
+
+########################
+# Rounding + indexing  #
+########################
 
 abstract type TimeRounding end
 struct DefaultRounding <: TimeRounding end
@@ -109,67 +120,145 @@ _is_scalar_index(::Colon) = false
 _is_scalar_index(i::AbstractRange) = false
 _is_scalar_index(i::AbstractVector) = false
 
-@propagate_inbounds function Base.getindex(S::AbstractSampleArray{T,N}, I::Vararg{Any,N}) where {T,N}
-    inds, _ = _indices_and_offsets(S.rate, I, _default_rounding)
+########################
+# Domain axes          #
+########################
 
-    if all(_is_scalar_index, I)
-        return S.sample[inds...]  # element
+"""
+    sampleaxes(D, d)
+
+Return the underlying sample-space axis (integer-based) for dimension `d`.
+"""
+sampleaxes(D::AbstractDomainArray, d::Int) = axes(D.data, d)
+
+sampleaxes(D::AbstractDomainArray) =
+    ntuple(d -> sampleaxes(D, d), ndims(D))
+
+"""
+    domainaxis(D, d)
+
+Return the domain-space axis for dimension `d`.
+
+- If `rate[d] === nothing`, this is just the sample axis.
+- Otherwise, it is a `StepRange` in domain units.
+"""
+function domainaxis(D::AbstractDomainArray, d::Int)
+    r = D.rate[d]
+    idxs = sampleaxes(D, d)
+    if r === nothing
+        return idxs
     else
-        new_sample = S.sample[inds...]
-        return SampleArray(new_sample, S.rate)
+        return (first(idxs)-1)/r : 1/r : (last(idxs)-1)/r
     end
 end
 
-@propagate_inbounds function Base.setindex!(S::SampleArray{T,N}, v, I::Vararg{Any,N}) where {T,N}
-    inds, _ = _indices_and_offsets(S.rate, I, _default_rounding)
-    return setindex!(S.sample, v, inds...)
+domainaxes(D::AbstractDomainArray) =
+    ntuple(d -> domainaxis(D, d), ndims(D))
+
+# Make Base.axes domain-first
+Base.axes(D::AbstractDomainArray) = domainaxes(D)
+
+function domainsize(D::AbstractDomainArray)
+    ntuple(d -> begin
+        ax = domainaxis(D, d)
+        if isa(ax, AbstractRange)
+            return last(ax) - first(ax)
+        else
+            return length(ax)
+        end
+    end, ndims(D))
 end
 
-@propagate_inbounds function Base.setindex!(S::SampleView{T,N}, v, I::Vararg{Any,N}) where {T,N}
-    inds, _ = _indices_and_offsets(S.rate, I, _default_rounding)
-    return setindex!(S.sample, v, inds...)
+function domainrange(D::AbstractDomainArray, d::Int)
+    ax = domainaxis(D, d)
+    return (first(ax), last(ax))
 end
 
-function timeslice(S::SampleArray{T,N}, I::Vararg{Any,N}) where {T,N}
-    inds, _ = _indices_and_offsets(S.rate, I, _default_rounding)
-    new_sample = S.sample[inds...]
-    return SampleArray(new_sample, S.rate)
+domainrange(D::AbstractDomainArray) =
+    ntuple(d -> domainrange(D, d), ndims(D))
+
+function domainextent(D::AbstractDomainArray)
+    ntuple(d -> begin
+        lo, hi = domainrange(D, d)
+        hi - lo
+    end, ndims(D))
 end
 
-function timeview(S::SampleArray{T,N}, I::Vararg{Any,N}) where {T,N}
-    inds, offs = _indices_and_offsets(S.rate, I, _default_rounding)
-    v = @view S.sample[inds...]
+########################
+# Indexing & views     #
+########################
+
+@propagate_inbounds function Base.getindex(D::AbstractDomainArray{T,N}, I::Vararg{Any,N}) where {T,N}
+    inds, _ = _indices_and_offsets(D.rate, I, _default_rounding)
+
+    if all(_is_scalar_index, I)
+        return D.data[inds...]  # element
+    else
+        new_data = D.data[inds...]
+        return DomainArray(new_data, D.rate)
+    end
+end
+
+@propagate_inbounds function Base.setindex!(D::DomainArray{T,N}, v, I::Vararg{Any,N}) where {T,N}
+    inds, _ = _indices_and_offsets(D.rate, I, _default_rounding)
+    return setindex!(D.data, v, inds...)
+end
+
+@propagate_inbounds function Base.setindex!(D::DomainView{T,N}, v, I::Vararg{Any,N}) where {T,N}
+    inds, _ = _indices_and_offsets(D.rate, I, _default_rounding)
+    return setindex!(D.data, v, inds...)
+end
+
+"""
+    domainslice(D, inds...)
+
+Slice in domain space, returning a new `DomainArray`.
+"""
+function domainslice(D::DomainArray{T,N}, I::Vararg{Any,N}) where {T,N}
+    inds, _ = _indices_and_offsets(D.rate, I, _default_rounding)
+    new_data = D.data[inds...]
+    return DomainArray(new_data, D.rate)
+end
+
+"""
+    domainview(D, inds...)
+
+View in domain space, returning a `DomainView`.
+"""
+function domainview(D::DomainArray{T,N}, I::Vararg{Any,N}) where {T,N}
+    inds, offs = _indices_and_offsets(D.rate, I, _default_rounding)
+    v = @view D.data[inds...]
     offset = ntuple(d -> offs[d], N)
-    return SampleView{T,N,typeof(v),typeof(S.rate),typeof(offset)}(v, S.rate, offset)
+    return DomainView{T,N,typeof(v),typeof(D.rate),typeof(offset)}(v, D.rate, offset)
 end
 
-function timeview(S::SampleView{T,N}, I::Vararg{Any,N}) where {T,N}
-    inds, offs = _indices_and_offsets(S.rate, I, _default_rounding)
-    v = @view S.sample[inds...]
-    offset = ntuple(d -> S.offset[d] + offs[d], N)
-    return SampleView{T,N,typeof(v),typeof(S.rate),typeof(offset)}(v, S.rate, offset)
+function domainview(D::DomainView{T,N}, I::Vararg{Any,N}) where {T,N}
+    inds, offs = _indices_and_offsets(D.rate, I, _default_rounding)
+    v = @view D.data[inds...]
+    offset = ntuple(d -> D.offset[d] + offs[d], N)
+    return DomainView{T,N,typeof(v),typeof(D.rate),typeof(offset)}(v, D.rate, offset)
 end
 
-function timeview_extreme(S::SampleArray{T,N}, I::Vararg{Any,N}) where {T,N}
-    inds, offs = _indices_and_offsets(S.rate, I, ExtremeRounding())
-    v = @view S.sample[inds...]
+function domainview_extreme(D::DomainArray{T,N}, I::Vararg{Any,N}) where {T,N}
+    inds, offs = _indices_and_offsets(D.rate, I, ExtremeRounding())
+    v = @view D.data[inds...]
     offset = ntuple(d -> offs[d], N)
-    return SampleView{T,N,typeof(v),typeof(S.rate),typeof(offset)}(v, S.rate, offset)
+    return DomainView{T,N,typeof(v),typeof(D.rate),typeof(offset)}(v, D.rate, offset)
 end
 
 macro extreme_view(ex)
     @assert ex.head === :call
     fn = ex.args[1]
-    if fn === :timeview
-        return :(timeview_extreme($(ex.args[2:end]...)))
+    if fn === :domainview
+        return :(domainview_extreme($(ex.args[2:end]...)))
     else
-        error("@extreme_view only wraps `timeview`")
+        error("@extreme_view only wraps `domainview`")
     end
 end
 
 """
     @sampleidx A[...]
-Rewrite `A[...]` to `A.sample[...]` for explicit sample-domain indexing.
+Rewrite `A[...]` to `A.data[...]` for explicit sample-domain indexing.
 """
 macro sampleidx(ex)
     return _rewrite_sampleidx(ex)
@@ -179,7 +268,7 @@ function _rewrite_sampleidx(ex)
     if ex isa Expr && ex.head === :ref
         arr = ex.args[1]
         idxs = ex.args[2:end]
-        return :( $(esc(arr)).sample[$(map(esc, idxs)...) ] )
+        return :( $(esc(arr)).data[$(map(esc, idxs)...) ] )
     end
     if ex isa Expr
         newargs = map(_rewrite_sampleidx, ex.args)
@@ -188,87 +277,111 @@ function _rewrite_sampleidx(ex)
     return ex
 end
 
-@propagate_inbounds function Base.view(S::AbstractSampleArray{T,N}, I::Vararg{Any,N}) where {T,N}
-    return timeview(S, I...)
+@propagate_inbounds function Base.view(D::AbstractDomainArray{T,N}, I::Vararg{Any,N}) where {T,N}
+    return domainview(D, I...)
 end
+
+########################
+# Explicit sample index#
+########################
 
 struct Samples
     value::Int
 end
 _to_index_and_offset(s::Samples, r, rounding) = (s.value, 0.0)
 
-function shiftaxis(S::SampleArray, shifts::Vararg{Real})
-    @assert length(shifts) == length(S.rate)
-    newoffset = ntuple(i -> S.rate[i] === nothing ? 0.0 : shifts[i], length(S.rate))
-    SampleView(S.sample, S.rate, newoffset)
+########################
+# Domain shifting      #
+########################
+
+"""
+    shiftdomain(D, shifts...)
+
+Shift the domain origin by the given amounts (in domain units) per dimension.
+"""
+function shiftdomain(D::DomainArray, shifts::Vararg{Real})
+    @assert length(shifts) == length(D.rate)
+    newoffset = ntuple(i -> D.rate[i] === nothing ? 0.0 : shifts[i], length(D.rate))
+    DomainView(D.data, D.rate, newoffset)
 end
-shiftaxis(S::SampleArray, shift::Real) = shiftaxis(S, (shift,))
+shiftdomain(D::DomainArray, shift::Real) = shiftdomain(D, (shift,))
 
-function shiftaxis(S::SampleView, shifts::Vararg{Real})
-    @assert length(shifts) == length(S.rate)
-    newoffset = ntuple(i -> S.offset[i] + (S.rate[i] === nothing ? 0.0 : shifts[i]),
-                       length(S.rate))
-    SampleView(S.sample, S.rate, newoffset)
+function shiftdomain(D::DomainView, shifts::Vararg{Real})
+    @assert length(shifts) == length(D.rate)
+    newoffset = ntuple(i -> D.offset[i] + (D.rate[i] === nothing ? 0.0 : shifts[i]),
+                       length(D.rate))
+    DomainView(D.data, D.rate, newoffset)
 end
-shiftaxis(S::SampleView, shift::Real) = shiftaxis(S, (shift,))
+shiftdomain(D::DomainView, shift::Real) = shiftdomain(D, (shift,))
 
-# rate compatibility
-_rates_match(a::AbstractSampleArray, b::AbstractSampleArray) = a.rate == b.rate
+########################
+# Rates + arithmetic   #
+########################
 
-# unwrap underlying storage or pass through
-_unwrap(x::AbstractSampleArray) = x.sample
+_rates_match(a::AbstractDomainArray, b::AbstractDomainArray) = a.rate == b.rate
+
+_unwrap(x::AbstractDomainArray) = x.data
 _unwrap(x) = x
 
-# binary op with rate check, returns SampleArray
-function _binary_op(op, A::AbstractSampleArray, B::AbstractSampleArray)
-    _rates_match(A, B) || error("Sample rates do not match")
-    sample = op.(_unwrap(A), _unwrap(B))
-    return SampleArray(sample, A.rate)
+# binary op with rate check, returns DomainArray
+function _binary_op(op, A::AbstractDomainArray, B::AbstractDomainArray)
+    _rates_match(A, B) || error("Domain rates do not match")
+    data = op.(_unwrap(A), _unwrap(B))
+    return DomainArray(data, A.rate)
 end
 
-# basic arithmetic between two sample arrays
-Base.:+(A::AbstractSampleArray, B::AbstractSampleArray) = _binary_op(+, A, B)
-Base.:-(A::AbstractSampleArray, B::AbstractSampleArray) = _binary_op(-, A, B)
-Base.:*(A::AbstractSampleArray, B::AbstractSampleArray) = _binary_op(*, A, B)
-Base.:/(A::AbstractSampleArray, B::AbstractSampleArray) = _binary_op(/, A, B)
+# basic arithmetic between two domain arrays
+Base.:+(A::AbstractDomainArray, B::AbstractDomainArray) = _binary_op(+, A, B)
+Base.:-(A::AbstractDomainArray, B::AbstractDomainArray) = _binary_op(-, A, B)
+Base.:*(A::AbstractDomainArray, B::AbstractDomainArray) = _binary_op(*, A, B)
+Base.:/(A::AbstractDomainArray, B::AbstractDomainArray) = _binary_op(/, A, B)
 
 # scalar operations (use broadcast)
-Base.:+(A::AbstractSampleArray, x::Number) = SampleArray(A.sample .+ x, A.rate)
-Base.:+(x::Number, A::AbstractSampleArray) = A + x
+Base.:+(A::AbstractDomainArray, x::Number) = DomainArray(A.data .+ x, A.rate)
+Base.:+(x::Number, A::AbstractDomainArray) = A + x
 
-Base.:-(A::AbstractSampleArray, x::Number) = SampleArray(A.sample .- x, A.rate)
-Base.:-(x::Number, A::AbstractSampleArray) = SampleArray(x .- A.sample, A.rate)
+Base.:-(A::AbstractDomainArray, x::Number) = DomainArray(A.data .- x, A.rate)
+Base.:-(x::Number, A::AbstractDomainArray) = DomainArray(x .- A.data, A.rate)
 
-Base.:*(A::AbstractSampleArray, x::Number) = SampleArray(A.sample .* x, A.rate)
-Base.:*(x::Number, A::AbstractSampleArray) = A * x
+Base.:*(A::AbstractDomainArray, x::Number) = DomainArray(A.data .* x, A.rate)
+Base.:*(x::Number, A::AbstractDomainArray) = A * x
 
-Base.:/(A::AbstractSampleArray, x::Number) = SampleArray(A.sample ./ x, A.rate)
+Base.:/(A::AbstractDomainArray, x::Number) = DomainArray(A.data ./ x, A.rate)
 
-# generic broadcast that preserves SampleArray and checks rates
-function Base.broadcast(f, A::AbstractSampleArray, Bs...)
+# generic broadcast that preserves DomainArray and checks rates
+function Base.broadcast(f, A::AbstractDomainArray, Bs...)
     rate = A.rate
-    # check other sample arrays for rate compatibility
     for B in Bs
-        if B isa AbstractSampleArray
-            _rates_match(A, B) || error("Sample rates do not match")
+        if B isa AbstractDomainArray
+            _rates_match(A, B) || error("Domain rates do not match")
         end
     end
-    sample = Base.broadcast(f, _unwrap(A), map(_unwrap, Bs)...)
-    return SampleArray(sample, rate)
+    data = Base.broadcast(f, _unwrap(A), map(_unwrap, Bs)...)
+    return DomainArray(data, rate)
 end
 
-# similar: preserve rate, wrap in SampleArray
-function Base.similar(S::AbstractSampleArray, ::Type{T}, dims::Dims) where {T}
-    SampleArray(similar(S.sample, T, dims), S.rate)
+# similar: preserve rate, wrap in DomainArray
+function Base.similar(D::AbstractDomainArray, ::Type{T}, dims::Dims) where {T}
+    DomainArray(similar(D.data, T, dims), D.rate)
 end
 
-Base.similar(S::AbstractSampleArray) = SampleArray(similar(S.sample), S.rate)
+Base.similar(D::AbstractDomainArray) = DomainArray(similar(D.data), D.rate)
 
-# promotion rule between two sample arrays (for element type)
-Base.promote_rule(::Type{SA}, ::Type{SB}) where {T,S,N,
-                                                SA<:AbstractSampleArray{T,N},
-                                                SB<:AbstractSampleArray{S,N}} =
-    AbstractSampleArray{promote_type(T,S),N}
+########################
+# Pretty-printing      #
+########################
+
+# Compute span for each dimension (size/rate)
+function _span(D)
+    dims = size(D)
+    rates = D.rate
+    spans = Vector{Float64}(undef, length(dims))
+    for i in eachindex(dims)
+        r = rates[i]
+        spans[i] = r === nothing ? dims[i] : dims[i] / r
+    end
+    return spans
+end
 
 # Format sampling rates: Real → itself, Nothing → "_"
 function _pretty_rate(rate::NTuple{N,Union{Nothing,Real}}) where {N}
@@ -280,46 +393,37 @@ function _pretty_rate(rate::NTuple{N,Union{Nothing,Real}}) where {N}
     return tuple(out...)
 end
 
-# Compute span for each dimension (size/rate)
-function _span(S)
-    dims = size(S)
-    rates = S.rate
-    spans = Vector{Float64}(undef, length(dims))
-    for i in eachindex(dims)
-        r = rates[i]
-        spans[i] = r === nothing ? dims[i] : dims[i] / r
-    end
-    return spans
-end
-
-function Base.show(io::IO, ::MIME"text/plain", S::SampleArray)
-    spans = _span(S)
+function Base.show(io::IO, ::MIME"text/plain", D::DomainArray)
+    spans = _span(D)
     span_str = "(" * join((@sprintf("%.6g", s) for s in spans), ", ") * ")"
-    rate_str = "(" * join(_pretty_rate(S.rate), ", ") * ")"
+    rate_str = "(" * join(_pretty_rate(D.rate), ", ") * ")"
 
     # Header
-    print(io, span_str, " SampleArray @ ", rate_str, "\n")
+    print(io, span_str, " DomainArray @ ", rate_str, "\n")
 
     # Indent underlying array for readability
     inner = IOContext(io, :compact => true)
-    Base.show(inner, MIME"text/plain"(), S.sample)
+    Base.show(inner, MIME"text/plain"(), D.data)
 end
 
-function Base.show(io::IO, ::MIME"text/plain", S::SampleView)
-    spans = _span(S)
+function Base.show(io::IO, ::MIME"text/plain", D::DomainView)
+    spans = _span(D)
     span_str = "(" * join((@sprintf("%.6g", s) for s in spans), ", ") * ")"
-    rate_str = "(" * join(_pretty_rate(S.rate), ", ") * ")"
+    rate_str = "(" * join(_pretty_rate(D.rate), ", ") * ")"
 
     # Header
-    print(io, span_str, " SampleView @ ", rate_str,
-          " with offset ", S.offset, "\n")
+    print(io, span_str, " DomainView @ ", rate_str,
+          " with offset ", D.offset, "\n")
 
     # Indent underlying array for readability
     inner = IOContext(io, :compact => true)
-    Base.show(inner, MIME"text/plain"(), S.sample)
+    Base.show(inner, MIME"text/plain"(), D.data)
 end
 
-# Dimension conversion
+########################
+# Dimension conversion #
+########################
+
 _to_pair(x::Tuple{<:Real,<:Union{Real,Nothing}}) = x
 _to_pair(x::Real) = (x, nothing)
 
@@ -328,75 +432,36 @@ _normalize_dims(dims::Tuple) = map(_to_pair, dims)
 
 _dim_from_pair((len, rate)::Tuple{<:Real,<:Real}) = Int(round(len * rate))
 _dim_from_pair((len, rate)::Tuple{<:Integer,Nothing}) = len
-_dim_from_pair((len, rate)::Tuple{<:Real,Nothing}) = error("Real-valued dimension requires a sampling rate")
+_dim_from_pair((len, rate)::Tuple{<:Real,Nothing}) =
+    error("Real-valued dimension requires a sampling rate")
 
 _rate_from_pair((_, rate)) = rate
 
 # Core constructor
-function _make_samplearray(f, T, dims)
+function _make_domainarray(f, T, dims)
     sizes = map(_dim_from_pair, dims)
     rates = map(_rate_from_pair, dims)
     arr   = f(T, sizes...)
-    return SampleArray(arr, tuple(rates...))
+    return DomainArray(arr, tuple(rates...))
 end
 
 # Public constructors
-samplezeros(dims...) = _make_samplearray(zeros, Float64, _normalize_dims(dims...))
-samplezeros(T::Type, dims...) = _make_samplearray(zeros, T, _normalize_dims(dims...))
+domainzeros(dims...) = _make_domainarray(zeros, Float64, _normalize_dims(dims...))
+domainzeros(T::Type, dims...) = _make_domainarray(zeros, T, _normalize_dims(dims...))
 
-sampleones(dims...) = _make_samplearray(ones, Float64, _normalize_dims(dims...))
-sampleones(T::Type, dims...) = _make_samplearray(ones, T, _normalize_dims(dims...))
+domainones(dims...) = _make_domainarray(ones, Float64, _normalize_dims(dims...))
+domainones(T::Type, dims...) = _make_domainarray(ones, T, _normalize_dims(dims...))
 
-samplerand(dims...) = _make_samplearray(rand, Float64, _normalize_dims(dims...))
-samplerand(T::Type, dims...) = _make_samplearray(rand, T, _normalize_dims(dims...))
+domainrand(dims...) = _make_domainarray(rand, Float64, _normalize_dims(dims...))
+domainrand(T::Type, dims...) = _make_domainarray(rand, T, _normalize_dims(dims...))
 
-samplefill(value, dims...) = _make_samplearray((T,s...)->fill(value, s...), Float64, _normalize_dims(dims...))
-samplefill(T::Type, value, dims...) = _make_samplearray((T,s...)->fill(value, s...), T, _normalize_dims(dims...))
+domainfill(value, dims...) = _make_domainarray((T,s...)->fill(value, s...), Float64, _normalize_dims(dims...))
+domainfill(T::Type, value, dims...) = _make_domainarray((T,s...)->fill(value, s...), T, _normalize_dims(dims...))
 
-samplefull = samplefill
+domainfull = domainfill
 
-# Macro support
-macro samples(exprs...)
+# Macro support for dimension specs
+macro domains(exprs...)
     pairs = map(x -> :(($x, nothing)), exprs)
     return Expr(:tuple, pairs...)
-end
-
-# Domain-space utilities
-function domainaxis(S::AbstractSampleArray, d::Int)
-    r = S.rate[d]
-    idxs = axes(S, d)
-    if r === nothing
-        return idxs
-    else
-        return (first(idxs)-1)/r : 1/r : (last(idxs)-1)/r
-    end
-end
-
-domainaxes(S::AbstractSampleArray) =
-    ntuple(d -> domainaxis(S, d), ndims(S))
-
-function domainsize(S::AbstractSampleArray)
-    ntuple(d -> begin
-        ax = domainaxis(S, d)
-        if isa(ax, AbstractRange)
-            return last(ax) - first(ax)
-        else
-            return length(ax)
-        end
-    end, ndims(S))
-end
-
-function domainrange(S::AbstractSampleArray, d::Int)
-    ax = domainaxis(S, d)
-    return (first(ax), last(ax))
-end
-
-domainrange(S::AbstractSampleArray) =
-    ntuple(d -> domainrange(S, d), ndims(S))
-
-function domainextent(S::AbstractSampleArray)
-    ntuple(d -> begin
-        lo, hi = domainrange(S, d)
-        hi - lo
-    end, ndims(S))
 end
