@@ -326,17 +326,10 @@ _to_pair(x::Real) = (x, nothing)
 _normalize_dims(dims::Vararg{Any}) = map(_to_pair, dims)
 _normalize_dims(dims::Tuple) = map(_to_pair, dims)
 
-_dim_from_pair((len, rate)::Tuple{<:Real,<:Real}) =
-    Int(round(len * rate))
-
-_dim_from_pair((len, rate)::Tuple{<:Integer,Nothing}) =
-    len
-
-_dim_from_pair((len, rate)::Tuple{<:Real,Nothing}) =
-    error("Real-valued dimension requires a sampling rate")
-
-_dim_from_pair((len, rate)::Tuple{<:Integer,<:Real}) =
-    error("Integer dimension with a real sampling rate is ambiguous")
+_dim_from_pair((len, rate)::Tuple{<:Real,<:Real}) = Int(round(len * rate))
+_dim_from_pair((len, rate)::Tuple{<:Integer,Nothing}) = len
+_dim_from_pair((len, rate)::Tuple{<:Real,Nothing}) = error("Real-valued dimension requires a sampling rate")
+_dim_from_pair((len, rate)::Tuple{<:Integer,<:Real}) = error("Integer dimension with a real sampling rate is ambiguous")
 
 _rate_from_pair((_, rate)) = rate
 
@@ -358,11 +351,8 @@ sampleones(T::Type, dims...) = _make_samplearray(ones, T, _normalize_dims(dims..
 samplerand(dims...) = _make_samplearray(rand, Float64, _normalize_dims(dims...))
 samplerand(T::Type, dims...) = _make_samplearray(rand, T, _normalize_dims(dims...))
 
-samplefill(value, dims...) =
-    _make_samplearray((T,s...)->fill(value, s...), Float64, _normalize_dims(dims...))
-
-samplefill(T::Type, value, dims...) =
-    _make_samplearray((T,s...)->fill(value, s...), T, _normalize_dims(dims...))
+samplefill(value, dims...) = _make_samplearray((T,s...)->fill(value, s...), Float64, _normalize_dims(dims...))
+samplefill(T::Type, value, dims...) = _make_samplearray((T,s...)->fill(value, s...), T, _normalize_dims(dims...))
 
 samplefull = samplefill
 
