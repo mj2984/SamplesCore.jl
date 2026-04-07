@@ -1,5 +1,6 @@
 module SamplesCore
 using Base: size, axes, IndexStyle, getindex, setindex!, @propagate_inbounds, show, @view
+using Printf
 include("SamplesCoreArrays.jl")
 export SampleArray, SampleView, timeslice, timeview, timeview_extreme, @extreme_view, @sampleidx
 using BitIntegers, FixedPointNumbers
