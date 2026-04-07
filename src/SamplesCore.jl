@@ -1,4 +1,6 @@
 module SamplesCore
+include("SamplesCoreArrays.jl")
+export SampleArray, SampleView, timeslice, timeview, timeview_extreme, @extreme_view, @sampleidx
 using BitIntegers, FixedPointNumbers
 import Base: +, -, *, /, show, eltype, promote_rule, broadcastable, getproperty
 import Base: zero
