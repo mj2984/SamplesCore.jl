@@ -1,5 +1,3 @@
-using Printf
-
 """
     SampleArray{T,N,A,R}
 
@@ -244,9 +242,9 @@ end
 shiftaxis(S::SampleView, shift::Real) = shiftaxis(S, (shift,))
 
 # Format sampling rates: Real → itself, Nothing → "_"
-function _pretty_rate(rate::NTuple)
-    out = Vector{Any}(undef, length(rate))
-    for i in eachindex(rate)
+function _pretty_rate(rate::NTuple{N,Union{Nothing,Real}}) where {N}
+    out = Vector{Any}(undef, N)
+    for i in 1:N
         r = rate[i]
         out[i] = r === nothing ? "_" : r
     end
@@ -274,25 +272,28 @@ function Base.show(io::IO, ::MIME"text/plain", S::SampleArray)
     spans = _span(S)
     rates = _pretty_rate(S.rate)
 
-    # Header line
+    # Format spans as "(0.5, 10)" etc.
+    span_str = "(" * join((@sprintf("%.6g", s) for s in spans), ", ") * ")"
+
     print(io,
-        @sprintf("%.6g", spans[1]), " at rates ", rates,
+        span_str, " at rates ", rates,
         " (SampleArray of ", typeof(S.sample), ")\n"
     )
 
-    # Delegate body printing
     Base.show(io, MIME"text/plain"(), S.sample)
 end
+
 function Base.show(io::IO, ::MIME"text/plain", S::SampleView)
     spans = _span(S)
     rates = _pretty_rate(S.rate)
 
+    span_str = "(" * join((@sprintf("%.6g", s) for s in spans), ", ") * ")"
+
     print(io,
-        @sprintf("%.6g", spans[1]), " at rates ", rates,
+        span_str, " at rates ", rates,
         " (SampleView of ", typeof(S.sample), ")",
         " with offset ", S.offset, "\n"
     )
 
     Base.show(io, MIME"text/plain"(), S.sample)
 end
-
