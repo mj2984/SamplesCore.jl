@@ -319,10 +319,7 @@ function Base.show(io::IO, ::MIME"text/plain", S::SampleView)
     Base.show(inner, MIME"text/plain"(), S.sample)
 end
 
-# ───────────────────────────────────────────────────────────────
 # Dimension conversion
-# ───────────────────────────────────────────────────────────────
-
 _to_pair(x::Tuple{<:Real,<:Union{Real,Nothing}}) = x
 _to_pair(x::Real) = (x, nothing)
 
@@ -343,10 +340,7 @@ _dim_from_pair((len, rate)::Tuple{<:Integer,<:Real}) =
 
 _rate_from_pair((_, rate)) = rate
 
-# ───────────────────────────────────────────────────────────────
 # Core constructor
-# ───────────────────────────────────────────────────────────────
-
 function _make_samplearray(f, T, dims)
     sizes = map(_dim_from_pair, dims)
     rates = map(_rate_from_pair, dims)
@@ -354,10 +348,7 @@ function _make_samplearray(f, T, dims)
     return SampleArray(arr, tuple(rates...))
 end
 
-# ───────────────────────────────────────────────────────────────
 # Public constructors
-# ───────────────────────────────────────────────────────────────
-
 samplezeros(dims...) = _make_samplearray(zeros, Float64, _normalize_dims(dims...))
 samplezeros(T::Type, dims...) = _make_samplearray(zeros, T, _normalize_dims(dims...))
 
@@ -375,11 +366,48 @@ samplefill(T::Type, value, dims...) =
 
 samplefull = samplefill
 
-# ───────────────────────────────────────────────────────────────
 # Macro support
-# ───────────────────────────────────────────────────────────────
-
 macro samples(exprs...)
     pairs = map(x -> :(($x, nothing)), exprs)
     return Expr(:tuple, pairs...)
+end
+
+# Domain-space utilities
+function domainaxis(S::AbstractSampleArray, d::Int)
+    r = S.rate[d]
+    idxs = axes(S, d)
+    if r === nothing
+        return idxs
+    else
+        return (first(idxs)-1)/r : 1/r : (last(idxs)-1)/r
+    end
+end
+
+domainaxes(S::AbstractSampleArray) =
+    ntuple(d -> domainaxis(S, d), ndims(S))
+
+function domainsize(S::AbstractSampleArray)
+    ntuple(d -> begin
+        ax = domainaxis(S, d)
+        if isa(ax, AbstractRange)
+            return last(ax) - first(ax)
+        else
+            return length(ax)
+        end
+    end, ndims(S))
+end
+
+function domainrange(S::AbstractSampleArray, d::Int)
+    ax = domainaxis(S, d)
+    return (first(ax), last(ax))
+end
+
+domainrange(S::AbstractSampleArray) =
+    ntuple(d -> domainrange(S, d), ndims(S))
+
+function domainextent(S::AbstractSampleArray)
+    ntuple(d -> begin
+        lo, hi = domainrange(S, d)
+        hi - lo
+    end, ndims(S))
 end
