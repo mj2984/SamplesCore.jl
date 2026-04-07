@@ -1,5 +1,3 @@
-using Base: size, axes, IndexStyle, getindex, setindex!, @propagate_inbounds, show, @view
-
 # ────────────────────────────────────────────────────────────────────────────────
 # TYPE DEFINITIONS
 # ────────────────────────────────────────────────────────────────────────────────
