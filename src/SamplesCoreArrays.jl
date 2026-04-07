@@ -329,7 +329,6 @@ _normalize_dims(dims::Tuple) = map(_to_pair, dims)
 _dim_from_pair((len, rate)::Tuple{<:Real,<:Real}) = Int(round(len * rate))
 _dim_from_pair((len, rate)::Tuple{<:Integer,Nothing}) = len
 _dim_from_pair((len, rate)::Tuple{<:Real,Nothing}) = error("Real-valued dimension requires a sampling rate")
-_dim_from_pair((len, rate)::Tuple{<:Integer,<:Real}) = error("Integer dimension with a real sampling rate is ambiguous")
 
 _rate_from_pair((_, rate)) = rate
 
