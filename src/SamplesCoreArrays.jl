@@ -318,3 +318,68 @@ function Base.show(io::IO, ::MIME"text/plain", S::SampleView)
     inner = IOContext(io, :compact => true)
     Base.show(inner, MIME"text/plain"(), S.sample)
 end
+
+# ───────────────────────────────────────────────────────────────
+# Dimension conversion
+# ───────────────────────────────────────────────────────────────
+
+_to_pair(x::Tuple{<:Real,<:Union{Real,Nothing}}) = x
+_to_pair(x::Real) = (x, nothing)
+
+_normalize_dims(dims::Vararg{Any}) = map(_to_pair, dims)
+_normalize_dims(dims::Tuple) = map(_to_pair, dims)
+
+_dim_from_pair((len, rate)::Tuple{<:Real,<:Real}) =
+    Int(round(len * rate))
+
+_dim_from_pair((len, rate)::Tuple{<:Integer,Nothing}) =
+    len
+
+_dim_from_pair((len, rate)::Tuple{<:Real,Nothing}) =
+    error("Real-valued dimension requires a sampling rate")
+
+_dim_from_pair((len, rate)::Tuple{<:Integer,<:Real}) =
+    error("Integer dimension with a real sampling rate is ambiguous")
+
+_rate_from_pair((_, rate)) = rate
+
+# ───────────────────────────────────────────────────────────────
+# Core constructor
+# ───────────────────────────────────────────────────────────────
+
+function _make_samplearray(f, T, dims)
+    sizes = map(_dim_from_pair, dims)
+    rates = map(_rate_from_pair, dims)
+    arr   = f(T, sizes...)
+    return SampleArray(arr, tuple(rates...))
+end
+
+# ───────────────────────────────────────────────────────────────
+# Public constructors
+# ───────────────────────────────────────────────────────────────
+
+samplezeros(dims...) = _make_samplearray(zeros, Float64, _normalize_dims(dims...))
+samplezeros(T::Type, dims...) = _make_samplearray(zeros, T, _normalize_dims(dims...))
+
+sampleones(dims...) = _make_samplearray(ones, Float64, _normalize_dims(dims...))
+sampleones(T::Type, dims...) = _make_samplearray(ones, T, _normalize_dims(dims...))
+
+samplerand(dims...) = _make_samplearray(rand, Float64, _normalize_dims(dims...))
+samplerand(T::Type, dims...) = _make_samplearray(rand, T, _normalize_dims(dims...))
+
+samplefill(value, dims...) =
+    _make_samplearray((T,s...)->fill(value, s...), Float64, _normalize_dims(dims...))
+
+samplefill(T::Type, value, dims...) =
+    _make_samplearray((T,s...)->fill(value, s...), T, _normalize_dims(dims...))
+
+samplefull = samplefill
+
+# ───────────────────────────────────────────────────────────────
+# Macro support
+# ───────────────────────────────────────────────────────────────
+
+macro samples(exprs...)
+    pairs = map(x -> :(($x, nothing)), exprs)
+    return Expr(:tuple, pairs...)
+end
