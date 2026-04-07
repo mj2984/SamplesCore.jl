@@ -1,5 +1,5 @@
-export SampleArray, SampleView, timeslice, timeview, timeview_extreme, @extreme_view, @sampleidx
-using Base: size, axes, IndexStyle, getindex, setindex!, @propagate_inbounds, show
+export SampleArray, SampleView, timeslice, timeview, timeview_extreme,@extreme_view, @sampleidx
+using Base: size, axes, IndexStyle, getindex, setindex!, @propagate_inbounds, show, @view
 
 # ────────────────────────────────────────────────────────────────────────────────
 # TYPE DEFINITIONS
@@ -8,28 +8,27 @@ using Base: size, axes, IndexStyle, getindex, setindex!, @propagate_inbounds, sh
 """
     SampleArray{T,N,A,R}
 
-A wrapper around an `AbstractArray{T,N}` with per‑dimension sampling rates.
+Wrapper around an `AbstractArray{T,N}` with per-dimension sampling rates.
 
 - `A` is the underlying array type
 - `R` is `NTuple{N,Union{Nothing,Real}}`
-  - `Real` → this dimension is time‑indexed
-  - `Nothing` → this dimension is sample‑indexed
+  - `Real`   → this dimension is time-indexed
+  - `Nothing` → this dimension is sample-indexed
 """
 struct SampleArray{T,N,A<:AbstractArray{T,N},R<:NTuple{N,Union{Nothing,Real}}} <: AbstractArray{T,N}
     sample::A
     rate::R
 end
 
-Base.IndexStyle(::Type{<:SampleArray}) = IndexStyle(A) where {T,N,A,R}
+Base.IndexStyle(::Type{SampleArray{T,N,A,R}}) where {T,N,A,R} = IndexStyle(A)
 Base.size(S::SampleArray) = size(S.sample)
 Base.axes(S::SampleArray) = axes(S.sample)
 Base.eltype(::Type{SampleArray{T}}) where {T} = T
 
-
 """
     SampleView{T,N,A,R,O}
 
-A view of a `SampleArray` that:
+View of a `SampleArray` that:
 
 - wraps a `SubArray`
 - preserves sampling rates
@@ -43,11 +42,10 @@ struct SampleView{T,N,A<:AbstractArray{T,N},
     offset::O
 end
 
-Base.IndexStyle(::Type{<:SampleView}) = IndexStyle(A) where {T,N,A,R,O}
+Base.IndexStyle(::Type{SampleView{T,N,A,R,O}}) where {T,N,A,R,O} = IndexStyle(A)
 Base.size(S::SampleView) = size(S.sample)
 Base.axes(S::SampleView) = axes(S.sample)
 Base.eltype(::Type{SampleView{T}}) where {T} = T
-
 
 # ────────────────────────────────────────────────────────────────────────────────
 # PRETTY PRINTING
@@ -63,7 +61,6 @@ function Base.show(io::IO, S::SampleView)
           ", size=", size(S), ")")
 end
 
-
 # ────────────────────────────────────────────────────────────────────────────────
 # ROUNDING MODES
 # ────────────────────────────────────────────────────────────────────────────────
@@ -74,44 +71,58 @@ struct ExtremeRounding <: TimeRounding end
 
 const _default_rounding = DefaultRounding()
 
-
 # ────────────────────────────────────────────────────────────────────────────────
 # INDEX CONVERSION HELPERS
 # ────────────────────────────────────────────────────────────────────────────────
 
+# Sample-indexed dimension: pass through
 _to_index_and_offset(idx, ::Nothing, ::TimeRounding) = (idx, 0.0)
 
+# Scalar time → sample index (default rounding)
 function _to_index_and_offset(t::Real, r::Real, ::DefaultRounding)
-    i = round(Int, t * r)
+    raw = floor(Int, t * r)
+    i = max(raw, 1)                 # clamp to 1 for t ≤ 0
     t1 = (i - 1) / r
     return (i, t1 - t)
 end
 
+# Scalar time → sample index (extreme rounding)
 function _to_index_and_offset(t::Real, r::Real, ::ExtremeRounding)
-    i = round(Int, t * r)
+    raw = ceil(Int, t * r)
+    i = max(raw, 1)
     t1 = (i - 1) / r
     return (i, t1 - t)
 end
 
+# Time range → integer range (default rounding)
 function _to_index_and_offset(tr::AbstractRange{<:Real}, r::Real, ::DefaultRounding)
     lo = first(tr); hi = last(tr)
-    i1 = ceil(Int, lo * r)
-    i2 = floor(Int, hi * r)
+    i1 = ceil(Int, lo * r) + 1      # 0.0 → 1
+    i2 = floor(Int, hi * r)         # inclusive upper
+    i2 = max(i2, i1)                # avoid empty / inverted ranges
     t1 = (i1 - 1) / r
     return (i1:i2, t1 - lo)
 end
 
+# Time range → integer range (extreme rounding)
 function _to_index_and_offset(tr::AbstractRange{<:Real}, r::Real, ::ExtremeRounding)
     lo = first(tr); hi = last(tr)
-    i1 = floor(Int, lo * r)
+    i1 = floor(Int, lo * r) + 1
     i2 = ceil(Int, hi * r)
+    i2 = max(i2, i1)
     t1 = (i1 - 1) / r
     return (i1:i2, t1 - lo)
 end
 
+# Integer / Colon indices
 _to_index_and_offset(i::Integer, r, ::TimeRounding) = (i, 0.0)
 _to_index_and_offset(::Colon, r, ::TimeRounding) = (Colon(), 0.0)
 
+# Disambiguation for integer + real rate + specific rounding
+_to_index_and_offset(i::Integer, r::Real, ::DefaultRounding) = (i, 0.0)
+_to_index_and_offset(i::Integer, r::Real, ::ExtremeRounding) = (i, 0.0)
+
+# Apply to all dimensions
 function _indices_and_offsets(rate::NTuple{N,Union{Nothing,Real}},
                               I::NTuple{N,Any},
                               rounding::TimeRounding) where {N}
@@ -124,7 +135,6 @@ function _indices_and_offsets(rate::NTuple{N,Union{Nothing,Real}},
     end
     return inds, offs
 end
-
 
 # ────────────────────────────────────────────────────────────────────────────────
 # TIME-DOMAIN INDEXING
@@ -140,7 +150,6 @@ end
     return getindex(S.sample, inds...)
 end
 
-
 # ────────────────────────────────────────────────────────────────────────────────
 # SETINDEX! SUPPORT
 # ────────────────────────────────────────────────────────────────────────────────
@@ -155,17 +164,26 @@ end
     return setindex!(S.sample, v, inds...)
 end
 
-
 # ────────────────────────────────────────────────────────────────────────────────
 # SLICE (COPY) AND VIEW (OFFSET-TRACKING)
 # ────────────────────────────────────────────────────────────────────────────────
 
+"""
+    timeslice(S, I...)
+
+Copy-based slicing in time domain. Returns a new `SampleArray`.
+"""
 function timeslice(S::SampleArray{T,N}, I::Vararg{Any,N}) where {T,N}
     inds, _ = _indices_and_offsets(S.rate, I, _default_rounding)
     new_sample = S.sample[inds...]
     return SampleArray(new_sample, S.rate)
 end
 
+"""
+    timeview(S, I...)
+
+View-based slicing with offset accumulation. Returns a `SampleView`.
+"""
 function timeview(S::SampleArray{T,N}, I::Vararg{Any,N}) where {T,N}
     inds, offs = _indices_and_offsets(S.rate, I, _default_rounding)
     v = @view S.sample[inds...]
@@ -173,13 +191,13 @@ function timeview(S::SampleArray{T,N}, I::Vararg{Any,N}) where {T,N}
     return SampleView{T,N,typeof(v),typeof(S.rate),typeof(offset)}(v, S.rate, offset)
 end
 
+# Cascaded views: accumulate offsets
 function timeview(S::SampleView{T,N}, I::Vararg{Any,N}) where {T,N}
     inds, offs = _indices_and_offsets(S.rate, I, _default_rounding)
     v = @view S.sample[inds...]
     offset = ntuple(d -> S.offset[d] + offs[d], N)
     return SampleView{T,N,typeof(v),typeof(S.rate),typeof(offset)}(v, S.rate, offset)
 end
-
 
 # ────────────────────────────────────────────────────────────────────────────────
 # EXTREME VIEW (floor lower, ceil upper)
@@ -202,11 +220,14 @@ macro extreme_view(ex)
     end
 end
 
-
 # ────────────────────────────────────────────────────────────────────────────────
 # SAMPLE-DOMAIN INDEXING MACRO
 # ────────────────────────────────────────────────────────────────────────────────
 
+"""
+    @sampleidx A[...]
+Rewrite `A[...]` to `A.sample[...]` for explicit sample-domain indexing.
+"""
 macro sampleidx(ex)
     if ex isa Expr && ex.head === :ref
         arr = ex.args[1]
@@ -215,4 +236,14 @@ macro sampleidx(ex)
     else
         error("@sampleidx expects A[...]")
     end
+end
+
+@propagate_inbounds function Base.view(S::SampleArray{T,N}, I::Vararg{Any,N}) where {T,N}
+    inds, _ = _indices_and_offsets(S.rate, I, _default_rounding)
+    return @view S.sample[inds...]
+end
+
+@propagate_inbounds function Base.view(S::SampleView{T,N}, I::Vararg{Any,N}) where {T,N}
+    inds, _ = _indices_and_offsets(S.rate, I, _default_rounding)
+    return @view S.sample[inds...]
 end
