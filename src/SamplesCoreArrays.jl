@@ -1,6 +1,4 @@
-# ────────────────────────────────────────────────────────────────────────────────
-# TYPE DEFINITIONS
-# ────────────────────────────────────────────────────────────────────────────────
+using Printf
 
 """
     SampleArray{T,N,A,R}
@@ -44,33 +42,14 @@ Base.size(S::SampleView) = size(S.sample)
 Base.axes(S::SampleView) = axes(S.sample)
 Base.eltype(::Type{SampleView{T}}) where {T} = T
 
-# ────────────────────────────────────────────────────────────────────────────────
-# PRETTY PRINTING
-# ────────────────────────────────────────────────────────────────────────────────
-
-function Base.show(io::IO, S::SampleArray)
-    print(io, "SampleArray(rate=", S.rate, ", size=", size(S), ")")
-end
-
-function Base.show(io::IO, S::SampleView)
-    print(io, "SampleView(rate=", S.rate,
-          ", offset=", S.offset,
-          ", size=", size(S), ")")
-end
-
-# ────────────────────────────────────────────────────────────────────────────────
 # ROUNDING MODES
-# ────────────────────────────────────────────────────────────────────────────────
-
 abstract type TimeRounding end
 struct DefaultRounding <: TimeRounding end
 struct ExtremeRounding <: TimeRounding end
 
 const _default_rounding = DefaultRounding()
 
-# ────────────────────────────────────────────────────────────────────────────────
 # INDEX CONVERSION HELPERS
-# ────────────────────────────────────────────────────────────────────────────────
 
 # Sample-indexed dimension: pass through
 _to_index_and_offset(idx, ::Nothing, ::TimeRounding) = (idx, 0.0)
@@ -133,9 +112,7 @@ function _indices_and_offsets(rate::NTuple{N,Union{Nothing,Real}},
     return inds, offs
 end
 
-# ────────────────────────────────────────────────────────────────────────────────
 # TIME-DOMAIN INDEXING
-# ────────────────────────────────────────────────────────────────────────────────
 
 @propagate_inbounds function Base.getindex(S::SampleArray{T,N}, I::Vararg{Any,N}) where {T,N}
     inds, _ = _indices_and_offsets(S.rate, I, _default_rounding)
@@ -147,9 +124,7 @@ end
     return getindex(S.sample, inds...)
 end
 
-# ────────────────────────────────────────────────────────────────────────────────
 # SETINDEX! SUPPORT
-# ────────────────────────────────────────────────────────────────────────────────
 
 @propagate_inbounds function Base.setindex!(S::SampleArray{T,N}, v, I::Vararg{Any,N}) where {T,N}
     inds, _ = _indices_and_offsets(S.rate, I, _default_rounding)
@@ -161,9 +136,7 @@ end
     return setindex!(S.sample, v, inds...)
 end
 
-# ────────────────────────────────────────────────────────────────────────────────
 # SLICE (COPY) AND VIEW (OFFSET-TRACKING)
-# ────────────────────────────────────────────────────────────────────────────────
 
 """
     timeslice(S, I...)
@@ -196,10 +169,7 @@ function timeview(S::SampleView{T,N}, I::Vararg{Any,N}) where {T,N}
     return SampleView{T,N,typeof(v),typeof(S.rate),typeof(offset)}(v, S.rate, offset)
 end
 
-# ────────────────────────────────────────────────────────────────────────────────
 # EXTREME VIEW (floor lower, ceil upper)
-# ────────────────────────────────────────────────────────────────────────────────
-
 function timeview_extreme(S::SampleArray{T,N}, I::Vararg{Any,N}) where {T,N}
     inds, offs = _indices_and_offsets(S.rate, I, ExtremeRounding())
     v = @view S.sample[inds...]
@@ -217,10 +187,7 @@ macro extreme_view(ex)
     end
 end
 
-# ────────────────────────────────────────────────────────────────────────────────
 # SAMPLE-DOMAIN INDEXING MACRO
-# ────────────────────────────────────────────────────────────────────────────────
-
 """
     @sampleidx A[...]
 Rewrite `A[...]` to `A.sample[...]` for explicit sample-domain indexing.
@@ -256,3 +223,76 @@ end
     inds, _ = _indices_and_offsets(S.rate, I, _default_rounding)
     return @view S.sample[inds...]
 end
+
+struct Samples
+    value::Int
+end
+_to_index_and_offset(s::Samples, r, rounding) = (s.value, 0.0)
+
+function shiftaxis(S::SampleArray, shifts::Vararg{Real})
+    @assert length(shifts) == length(S.rate)
+    newoffset = ntuple(i -> S.rate[i] === nothing ? 0.0 : shifts[i], length(S.rate))
+    SampleView(S.sample, S.rate, newoffset)
+end
+shiftaxis(S::SampleArray, shift::Real) = shiftaxis(S, (shift,))
+function shiftaxis(S::SampleView, shifts::Vararg{Real})
+    @assert length(shifts) == length(S.rate)
+    newoffset = ntuple(i -> S.offset[i] + (S.rate[i] === nothing ? 0.0 : shifts[i]),
+                       length(S.rate))
+    SampleView(S.sample, S.rate, newoffset)
+end
+shiftaxis(S::SampleView, shift::Real) = shiftaxis(S, (shift,))
+
+# Format sampling rates: Real → itself, Nothing → "_"
+function _pretty_rate(rate::NTuple)
+    out = Vector{Any}(undef, length(rate))
+    for i in eachindex(rate)
+        r = rate[i]
+        out[i] = r === nothing ? "_" : r
+    end
+    return tuple(out...)
+end
+
+# Compute span for each dimension (size/rate)
+function _span(S)
+    dims = size(S)
+    rates = S.rate
+
+    spans = Vector{Float64}(undef, length(dims))
+    for i in eachindex(dims)
+        r = rates[i]
+        if r === nothing
+            spans[i] = dims[i]          # raw sample count
+        else
+            spans[i] = dims[i] / r      # scaled span
+        end
+    end
+    return spans
+end
+
+function Base.show(io::IO, ::MIME"text/plain", S::SampleArray)
+    spans = _span(S)
+    rates = _pretty_rate(S.rate)
+
+    # Header line
+    print(io,
+        @sprintf("%.6g", spans[1]), " at rates ", rates,
+        " (SampleArray of ", typeof(S.sample), ")\n"
+    )
+
+    # Delegate body printing
+    Base.show(io, MIME"text/plain"(), S.sample)
+end
+function Base.show(io::IO, ::MIME"text/plain", S::SampleView)
+    spans = _span(S)
+    rates = _pretty_rate(S.rate)
+
+    print(io,
+        @sprintf("%.6g", spans[1]), " at rates ", rates,
+        " (SampleView of ", typeof(S.sample), ")",
+        " with offset ", S.offset, "\n"
+    )
+
+    Base.show(io, MIME"text/plain"(), S.sample)
+end
+
