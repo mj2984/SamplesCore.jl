@@ -1,4 +1,3 @@
-export SampleArray, SampleView, timeslice, timeview, timeview_extreme,@extreme_view, @sampleidx
 using Base: size, axes, IndexStyle, getindex, setindex!, @propagate_inbounds, show, @view
 
 # ────────────────────────────────────────────────────────────────────────────────
@@ -229,13 +228,25 @@ end
 Rewrite `A[...]` to `A.sample[...]` for explicit sample-domain indexing.
 """
 macro sampleidx(ex)
+    return _rewrite_sampleidx(ex)
+end
+
+function _rewrite_sampleidx(ex)
+    # Case 1: A[...] → :(A.sample[...])
     if ex isa Expr && ex.head === :ref
         arr = ex.args[1]
         idxs = ex.args[2:end]
-        return :( $(arr).sample[$(idxs...)] )
-    else
-        error("@sampleidx expects A[...]")
+        return :( $(esc(arr)).sample[$(map(esc, idxs)...) ] )
     end
+
+    # Case 2: recursively rewrite inside expressions
+    if ex isa Expr
+        newargs = map(_rewrite_sampleidx, ex.args)
+        return Expr(ex.head, newargs...)
+    end
+
+    # Case 3: literals, symbols, etc.
+    return ex
 end
 
 @propagate_inbounds function Base.view(S::SampleArray{T,N}, I::Vararg{Any,N}) where {T,N}
