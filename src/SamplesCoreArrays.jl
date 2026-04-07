@@ -323,31 +323,6 @@ _rates_match(a::AbstractDomainArray, b::AbstractDomainArray) = a.rate == b.rate
 _unwrap(x::AbstractDomainArray) = x.data
 _unwrap(x) = x
 
-# binary op with rate check, returns DomainArray
-function _binary_op(op, A::AbstractDomainArray, B::AbstractDomainArray)
-    _rates_match(A, B) || error("Domain rates do not match")
-    data = op.(_unwrap(A), _unwrap(B))
-    return DomainArray(data, A.rate)
-end
-
-# basic arithmetic between two domain arrays
-Base.:+(A::AbstractDomainArray, B::AbstractDomainArray) = _binary_op(+, A, B)
-Base.:-(A::AbstractDomainArray, B::AbstractDomainArray) = _binary_op(-, A, B)
-Base.:*(A::AbstractDomainArray, B::AbstractDomainArray) = _binary_op(*, A, B)
-Base.:/(A::AbstractDomainArray, B::AbstractDomainArray) = _binary_op(/, A, B)
-
-# scalar operations (use broadcast)
-Base.:+(A::AbstractDomainArray, x::Number) = DomainArray(A.data .+ x, A.rate)
-Base.:+(x::Number, A::AbstractDomainArray) = A + x
-
-Base.:-(A::AbstractDomainArray, x::Number) = DomainArray(A.data .- x, A.rate)
-Base.:-(x::Number, A::AbstractDomainArray) = DomainArray(x .- A.data, A.rate)
-
-Base.:*(A::AbstractDomainArray, x::Number) = DomainArray(A.data .* x, A.rate)
-Base.:*(x::Number, A::AbstractDomainArray) = A * x
-
-Base.:/(A::AbstractDomainArray, x::Number) = DomainArray(A.data ./ x, A.rate)
-
 # generic broadcast that preserves DomainArray and checks rates
 function Base.broadcast(f, A::AbstractDomainArray, Bs...)
     rate = A.rate
@@ -359,6 +334,19 @@ function Base.broadcast(f, A::AbstractDomainArray, Bs...)
     data = Base.broadcast(f, _unwrap(A), map(_unwrap, Bs)...)
     return DomainArray(data, rate)
 end
+
+# Delegate all mixed operations to broadcast
+Base.:+(A::AbstractDomainArray, B) = broadcast(+, A, B)
+Base.:+(A, B::AbstractDomainArray) = broadcast(+, A, B)
+
+Base.:-(A::AbstractDomainArray, B) = broadcast(-, A, B)
+Base.:-(A, B::AbstractDomainArray) = broadcast(-, A, B)
+
+Base.:*(A::AbstractDomainArray, B) = broadcast(*, A, B)
+Base.:*(A, B::AbstractDomainArray) = broadcast(*, A, B)
+
+Base.:/(A::AbstractDomainArray, B) = broadcast(/, A, B)
+Base.:/(A, B::AbstractDomainArray) = broadcast(/, A, B)
 
 # similar: preserve rate, wrap in DomainArray
 function Base.similar(D::AbstractDomainArray, ::Type{T}, dims::Dims) where {T}
