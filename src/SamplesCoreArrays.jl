@@ -12,10 +12,10 @@ struct DomainView{T,N,A<:AbstractArray{T,N}, R<:NTuple{N,Union{Nothing,Real}}, O
     rate::R
     offset::O
 end
-DomainArray(data::AbstractArray{T,N},rate::NTuple{N,Union{Nothing,Real}}) where {T,N} = DomainArray(data, rate, ntuple(_ -> 0.0, N))
-DomainArray(data::AbstractArray{T,N}) where {T,N} = DomainArray(data, ntuple(_ -> nothing, N))
-DomainView(data::AbstractArray{T,N}, rate::NTuple{N,Union{Nothing,Real}}) where {T,N} = DomainView(data, rate, ntuple(_ -> 0.0, N))
-DomainView(data::AbstractArray{T,N}) where {T,N} = DomainView(data, ntuple(_ -> nothing, N))
+@inline DomainArray(data::AbstractArray{T,N},rate::NTuple{N,Union{Nothing,Real}}) where {T,N} = DomainArray(data, rate, ntuple(_ -> 0.0, N))
+@inline DomainArray(data::AbstractArray{T,N}) where {T,N} = DomainArray(data, ntuple(_ -> nothing, N))
+@inline DomainView(data::AbstractArray{T,N}, rate::NTuple{N,Union{Nothing,Real}}) where {T,N} = DomainView(data, rate, ntuple(_ -> 0.0, N))
+@inline DomainView(data::AbstractArray{T,N}) where {T,N} = DomainView(data, ntuple(_ -> nothing, N))
 
 Base.IndexStyle(::Type{<:AbstractDomainArray}) = IndexLinear()
 Base.size(D::AbstractDomainArray) = size(D.data)
