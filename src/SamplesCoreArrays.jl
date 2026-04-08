@@ -1,33 +1,19 @@
+module DomainArrays
+
+using Base: @propagate_inbounds, IndexStyle, axes, size, eltype, show
+using Printf: @sprintf
+
 ############################
 # Core domain array types  #
 ############################
 
 abstract type AbstractDomainArray{T,N} <: AbstractArray{T,N} end
 
-"""
-    DomainArray{T,N,A,R}
-
-Wrapper around an `AbstractArray{T,N}` with per-dimension sampling rates.
-
-- `A` is the underlying array type
-- `R` is `NTuple{N,Union{Nothing,Real}}`
-  - `Real`    → this dimension is domain-indexed (e.g. time)
-  - `Nothing` → this dimension is sample-indexed (plain integer axis)
-"""
 struct DomainArray{T,N,A<:AbstractArray{T,N},R<:NTuple{N,Union{Nothing,Real}}} <: AbstractDomainArray{T,N}
     data::A
     rate::R
 end
 
-"""
-    DomainView{T,N,A,R,O}
-
-View of a `DomainArray` that:
-
-- wraps a `SubArray`
-- preserves sampling rates
-- tracks accumulated domain offsets per dimension
-"""
 struct DomainView{T,N,A<:AbstractArray{T,N},
                   R<:NTuple{N,Union{Nothing,Real}},
                   O<:NTuple{N,Float64}} <: AbstractDomainArray{T,N}
@@ -36,13 +22,14 @@ struct DomainView{T,N,A<:AbstractArray{T,N},
     offset::O
 end
 
-########################
-# Array interface      #
-########################
-
 Base.IndexStyle(::Type{<:AbstractDomainArray}) = IndexLinear()
 Base.size(D::AbstractDomainArray) = size(D.data)
 Base.eltype(::Type{<:AbstractDomainArray{T}}) where T = T
+
+Base.strides(D::AbstractDomainArray) = strides(D.data)
+Base.pointer(D::DomainArray) = pointer(D.data)
+Base.unsafe_convert(::Type{Ptr{T}}, D::DomainArray{T}) where {T} =
+    Base.unsafe_convert(Ptr{T}, D.data)
 
 ########################
 # Rounding + indexing  #
@@ -54,115 +41,77 @@ struct ExtremeRounding <: TimeRounding end
 
 const _default_rounding = DefaultRounding()
 
-# Sample-indexed dimension: pass through
-_to_index_and_offset(idx, ::Nothing, ::TimeRounding) = (idx, 0.0)
-
-# Scalar time → sample index (default rounding)
-function _to_index_and_offset(t::Real, r::Real, ::DefaultRounding)
-    raw = floor(Int, t * r)
-    i = max(raw, 1)
-    t1 = (i - 1) / r
-    return (i, t1 - t)
-end
-
-# Scalar time → sample index (extreme rounding)
-function _to_index_and_offset(t::Real, r::Real, ::ExtremeRounding)
-    raw = ceil(Int, t * r)
-    i = max(raw, 1)
-    t1 = (i - 1) / r
-    return (i, t1 - t)
-end
-
-# Time range → integer range (default rounding)
-function _to_index_and_offset(tr::AbstractRange{<:Real}, r::Real, ::DefaultRounding)
-    lo = first(tr); hi = last(tr)
-    i1 = ceil(Int, lo * r) + 1
-    i2 = floor(Int, hi * r)
-    i2 = max(i2, i1)
-    t1 = (i1 - 1) / r
-    return (i1:i2, t1 - lo)
-end
-
-# Time range → integer range (extreme rounding)
-function _to_index_and_offset(tr::AbstractRange{<:Real}, r::Real, ::ExtremeRounding)
-    lo = first(tr); hi = last(tr)
-    i1 = floor(Int, lo * r) + 1
-    i2 = ceil(Int, hi * r)
-    i2 = max(i2, i1)
-    t1 = (i1 - 1) / r
-    return (i1:i2, t1 - lo)
-end
-
-# Integer / Colon indices
-_to_index_and_offset(i::Integer, r, ::TimeRounding) = (i, 0.0)
-_to_index_and_offset(::Colon, r, ::TimeRounding) = (Colon(), 0.0)
-
-# Disambiguation for integer + real rate + specific rounding
-_to_index_and_offset(i::Integer, r::Real, ::DefaultRounding) = (i, 0.0)
-_to_index_and_offset(i::Integer, r::Real, ::ExtremeRounding) = (i, 0.0)
-
-# Apply to all dimensions
-function _indices_and_offsets(rate::NTuple{N,Union{Nothing,Real}},
-                              I::NTuple{N,Any},
-                              rounding::TimeRounding) where {N}
-    inds = ntuple(i -> nothing, N)
-    offs = ntuple(i -> 0.0, N)
-    for k in 1:N
-        idx, off = _to_index_and_offset(I[k], rate[k], rounding)
-        inds = Base.setindex(inds, idx, k)
-        offs = Base.setindex(offs, off, k)
-    end
-    return inds, offs
-end
-
-_is_scalar_index(i) = i isa Integer || i isa CartesianIndex
-_is_scalar_index(::Colon) = false
-_is_scalar_index(i::AbstractRange) = false
-_is_scalar_index(i::AbstractVector) = false
-
 ########################
-# Domain axes          #
+# Explicit sample index#
 ########################
 
-"""
-    sampleaxes(D, d)
+struct Samples
+    value::Int
+end
 
-Return the underlying sample-space axis (integer-based) for dimension `d`.
-"""
+########################
+# Domain index + axes  #
+########################
+
+struct DomainIdx{T}
+    t::T
+    i::Int
+end
+
+struct DomainAxis{T}
+    first_t::T
+    step_t::T
+    len::Int
+end
+
+Base.length(ax::DomainAxis) = ax.len
+
+Base.getindex(ax::DomainAxis{T}, k::Int) where {T} =
+    DomainIdx{T}(ax.first_t + (k-1)*ax.step_t, k)
+
+function Base.iterate(ax::DomainAxis{T}, state::Int=1) where {T}
+    state > ax.len && return nothing
+    return (ax[state], state+1)
+end
+
+Base.IteratorSize(::Type{<:DomainAxis}) = Base.HasLength()
+Base.eltype(::Type{DomainAxis{T}}) where {T} = DomainIdx{T}
+
+########################
+# Sample + domain axes #
+########################
+
 sampleaxes(D::AbstractDomainArray, d::Int) = axes(D.data, d)
 
 sampleaxes(D::AbstractDomainArray) =
     ntuple(d -> sampleaxes(D, d), ndims(D))
 
-"""
-    domainaxis(D, d)
-
-Return the domain-space axis for dimension `d`.
-
-- If `rate[d] === nothing`, this is just the sample axis.
-- Otherwise, it is a `StepRange` in domain units.
-"""
 function domainaxis(D::AbstractDomainArray, d::Int)
     r = D.rate[d]
     idxs = sampleaxes(D, d)
     if r === nothing
         return idxs
     else
-        return (first(idxs)-1)/r : 1/r : (last(idxs)-1)/r
+        first_i = first(idxs)
+        len     = length(idxs)
+        first_t = (first_i - 1) / r
+        step_t  = 1 / r
+        return DomainAxis(first_t, step_t, len)
     end
 end
 
 domainaxes(D::AbstractDomainArray) =
     ntuple(d -> domainaxis(D, d), ndims(D))
 
-# Make Base.axes domain-first
 Base.axes(D::AbstractDomainArray) = domainaxes(D)
 
 function domainsize(D::AbstractDomainArray)
     ntuple(d -> begin
         ax = domainaxis(D, d)
-        if isa(ax, AbstractRange)
+        if ax isa AbstractRange
             return last(ax) - first(ax)
+        elseif ax isa DomainAxis
+            ax.step_t * (ax.len - 1)
         else
             return length(ax)
         end
@@ -171,7 +120,15 @@ end
 
 function domainrange(D::AbstractDomainArray, d::Int)
     ax = domainaxis(D, d)
-    return (first(ax), last(ax))
+    if ax isa AbstractRange
+        return (first(ax), last(ax))
+    elseif ax isa DomainAxis
+        lo = ax.first_t
+        hi = ax.first_t + (ax.len - 1) * ax.step_t
+        return (lo, hi)
+    else
+        return (1, length(ax))
+    end
 end
 
 domainrange(D::AbstractDomainArray) =
@@ -185,14 +142,74 @@ function domainextent(D::AbstractDomainArray)
 end
 
 ########################
+# Indexing helpers     #
+########################
+
+_to_index_and_offset(idx::DomainIdx, r, ::TimeRounding) = (idx.i, 0.0)
+
+_to_index_and_offset(s::Samples, r, ::TimeRounding) = (s.value, 0.0)
+
+function _to_index_and_offset(t::Real, r::Real, ::DefaultRounding)
+    raw = floor(Int, t * r)
+    i = max(raw, 1)
+    t1 = (i - 1) / r
+    return (i, t1 - t)
+end
+
+function _to_index_and_offset(t::Real, r::Real, ::ExtremeRounding)
+    raw = ceil(Int, t * r)
+    i = max(raw, 1)
+    t1 = (i - 1) / r
+    return (i, t1 - t)
+end
+
+function _to_index_and_offset(tr::AbstractRange{<:Real}, r::Real, ::DefaultRounding)
+    lo = first(tr); hi = last(tr)
+    i1 = ceil(Int, lo * r) + 1
+    i2 = floor(Int, hi * r)
+    i2 = max(i2, i1)
+    t1 = (i1 - 1) / r
+    return (i1:i2, t1 - lo)
+end
+
+function _to_index_and_offset(tr::AbstractRange{<:Real}, r::Real, ::ExtremeRounding)
+    lo = first(tr); hi = last(tr)
+    i1 = floor(Int, lo * r) + 1
+    i2 = ceil(Int, hi * r)
+    i2 = max(i2, i1)
+    t1 = (i1 - 1) / r
+    return (i1:i2, t1 - lo)
+end
+
+_to_index_and_offset(i::Integer, ::Nothing, ::TimeRounding) = (i, 0.0)
+_to_index_and_offset(::Colon, r, ::TimeRounding) = (Colon(), 0.0)
+
+function _indices_and_offsets(rate::NTuple{N,Union{Nothing,Real}},
+                              I::NTuple{N,Any},
+                              rounding::TimeRounding) where {N}
+    inds = ntuple(i -> nothing, N)
+    offs = ntuple(i -> 0.0, N)
+    for k in 1:N
+        idx, off = _to_index_and_offset(I[k], rate[k], rounding)
+        inds = Base.setindex(inds, idx, k)
+        offs = Base.setindex(offs, off, k)
+    end
+    return inds, offs
+end
+
+_is_scalar_index(i) = i isa Integer || i isa CartesianIndex || i isa DomainIdx
+_is_scalar_index(::Colon) = false
+_is_scalar_index(i::AbstractRange) = false
+_is_scalar_index(i::AbstractVector) = false
+
+########################
 # Indexing & views     #
 ########################
 
 @propagate_inbounds function Base.getindex(D::AbstractDomainArray{T,N}, I::Vararg{Any,N}) where {T,N}
     inds, _ = _indices_and_offsets(D.rate, I, _default_rounding)
-
     if all(_is_scalar_index, I)
-        return D.data[inds...]  # element
+        return D.data[inds...]
     else
         new_data = D.data[inds...]
         return DomainArray(new_data, D.rate)
@@ -209,22 +226,12 @@ end
     return setindex!(D.data, v, inds...)
 end
 
-"""
-    domainslice(D, inds...)
-
-Slice in domain space, returning a new `DomainArray`.
-"""
 function domainslice(D::DomainArray{T,N}, I::Vararg{Any,N}) where {T,N}
     inds, _ = _indices_and_offsets(D.rate, I, _default_rounding)
     new_data = D.data[inds...]
     return DomainArray(new_data, D.rate)
 end
 
-"""
-    domainview(D, inds...)
-
-View in domain space, returning a `DomainView`.
-"""
 function domainview(D::DomainArray{T,N}, I::Vararg{Any,N}) where {T,N}
     inds, offs = _indices_and_offsets(D.rate, I, _default_rounding)
     v = @view D.data[inds...]
@@ -256,10 +263,6 @@ macro extreme_view(ex)
     end
 end
 
-"""
-    @sampleidx A[...]
-Rewrite `A[...]` to `A.data[...]` for explicit sample-domain indexing.
-"""
 macro sampleidx(ex)
     return _rewrite_sampleidx(ex)
 end
@@ -282,23 +285,9 @@ end
 end
 
 ########################
-# Explicit sample index#
-########################
-
-struct Samples
-    value::Int
-end
-_to_index_and_offset(s::Samples, r, rounding) = (s.value, 0.0)
-
-########################
 # Domain shifting      #
 ########################
 
-"""
-    shiftdomain(D, shifts...)
-
-Shift the domain origin by the given amounts (in domain units) per dimension.
-"""
 function shiftdomain(D::DomainArray, shifts::Vararg{Real})
     @assert length(shifts) == length(D.rate)
     newoffset = ntuple(i -> D.rate[i] === nothing ? 0.0 : shifts[i], length(D.rate))
@@ -323,20 +312,17 @@ _rates_match(a::AbstractDomainArray, b::AbstractDomainArray) = a.rate == b.rate
 _unwrap(x::AbstractDomainArray) = x.data
 _unwrap(x) = x
 
-# binary op with rate check, returns DomainArray
 function _binary_op(op, A::AbstractDomainArray, B::AbstractDomainArray)
     _rates_match(A, B) || error("Domain rates do not match")
     data = op.(_unwrap(A), _unwrap(B))
     return DomainArray(data, A.rate)
 end
 
-# basic arithmetic between two domain arrays
 Base.:+(A::AbstractDomainArray, B::AbstractDomainArray) = _binary_op(+, A, B)
 Base.:-(A::AbstractDomainArray, B::AbstractDomainArray) = _binary_op(-, A, B)
 Base.:*(A::AbstractDomainArray, B::AbstractDomainArray) = _binary_op(*, A, B)
 Base.:/(A::AbstractDomainArray, B::AbstractDomainArray) = _binary_op(/, A, B)
 
-# scalar operations (use broadcast)
 Base.:+(A::AbstractDomainArray, x::Number) = DomainArray(A.data .+ x, A.rate)
 Base.:+(x::Number, A::AbstractDomainArray) = A + x
 
@@ -348,7 +334,6 @@ Base.:*(x::Number, A::AbstractDomainArray) = A * x
 
 Base.:/(A::AbstractDomainArray, x::Number) = DomainArray(A.data ./ x, A.rate)
 
-# generic broadcast that preserves DomainArray and checks rates
 function Base.broadcast(f, A::AbstractDomainArray, Bs...)
     rate = A.rate
     for B in Bs
@@ -360,7 +345,6 @@ function Base.broadcast(f, A::AbstractDomainArray, Bs...)
     return DomainArray(data, rate)
 end
 
-# similar: preserve rate, wrap in DomainArray
 function Base.similar(D::AbstractDomainArray, ::Type{T}, dims::Dims) where {T}
     DomainArray(similar(D.data, T, dims), D.rate)
 end
@@ -371,7 +355,6 @@ Base.similar(D::AbstractDomainArray) = DomainArray(similar(D.data), D.rate)
 # Pretty-printing      #
 ########################
 
-# Compute span for each dimension (size/rate)
 function _span(D)
     dims = size(D)
     rates = D.rate
@@ -383,7 +366,6 @@ function _span(D)
     return spans
 end
 
-# Format sampling rates: Real → itself, Nothing → "_"
 function _pretty_rate(rate::NTuple{N,Union{Nothing,Real}}) where {N}
     out = Vector{Any}(undef, N)
     for i in 1:N
@@ -397,11 +379,7 @@ function Base.show(io::IO, ::MIME"text/plain", D::DomainArray)
     spans = _span(D)
     span_str = "(" * join((@sprintf("%.6g", s) for s in spans), ", ") * ")"
     rate_str = "(" * join(_pretty_rate(D.rate), ", ") * ")"
-
-    # Header
     print(io, span_str, " DomainArray @ ", rate_str, "\n")
-
-    # Indent underlying array for readability
     inner = IOContext(io, :compact => true)
     Base.show(inner, MIME"text/plain"(), D.data)
 end
@@ -410,12 +388,8 @@ function Base.show(io::IO, ::MIME"text/plain", D::DomainView)
     spans = _span(D)
     span_str = "(" * join((@sprintf("%.6g", s) for s in spans), ", ") * ")"
     rate_str = "(" * join(_pretty_rate(D.rate), ", ") * ")"
-
-    # Header
     print(io, span_str, " DomainView @ ", rate_str,
           " with offset ", D.offset, "\n")
-
-    # Indent underlying array for readability
     inner = IOContext(io, :compact => true)
     Base.show(inner, MIME"text/plain"(), D.data)
 end
@@ -437,7 +411,6 @@ _dim_from_pair((len, rate)::Tuple{<:Real,Nothing}) =
 
 _rate_from_pair((_, rate)) = rate
 
-# Core constructor
 function _make_domainarray(f, T, dims)
     sizes = map(_dim_from_pair, dims)
     rates = map(_rate_from_pair, dims)
@@ -445,7 +418,6 @@ function _make_domainarray(f, T, dims)
     return DomainArray(arr, tuple(rates...))
 end
 
-# Public constructors
 domainzeros(dims...) = _make_domainarray(zeros, Float64, _normalize_dims(dims...))
 domainzeros(T::Type, dims...) = _make_domainarray(zeros, T, _normalize_dims(dims...))
 
@@ -460,8 +432,140 @@ domainfill(T::Type, value, dims...) = _make_domainarray((T,s...)->fill(value, s.
 
 domainfull = domainfill
 
-# Macro support for dimension specs
 macro domains(exprs...)
     pairs = map(x -> :(($x, nothing)), exprs)
     return Expr(:tuple, pairs...)
 end
+
+########################
+# Interpolation API    #
+########################
+
+abstract type AbstractInterpolator end
+
+"""
+    NearestInterp()
+
+Simple nearest-sample interpolator: just uses domain indexing.
+You can plug in more sophisticated ones later.
+"""
+struct NearestInterp <: AbstractInterpolator end
+
+interp(::NearestInterp, A::AbstractDomainArray, t) = A[t]
+
+########################
+# Loop macros          #
+########################
+
+"""
+    @domainloop for t in axes(A, d)
+        body
+    end
+
+Rewrites to iterate over `DomainIdx`s, binding:
+
+- `t` to the domain coordinate (`idx.t`)
+- `idx` (hidden) to the domain index object
+
+and uses `A[idx]` for writes when you write `A[t]`.
+"""
+macro domainloop(ex)
+    @assert ex.head === :for "Usage: @domainloop for t in iter ... end"
+    loopvar, iter = ex.args[1], ex.args[2]
+    body = ex.args[3]
+
+    idx_sym = gensym(:idx)
+    t_sym   = loopvar
+
+    # Rewrite A[t] on LHS of assignments to A[idx_sym]
+    function rewrite_lhs(e)
+        if e isa Expr && e.head === :(=)
+            lhs, rhs = e.args
+            if lhs isa Expr && lhs.head === :ref
+                arr = lhs.args[1]
+                idxs = lhs.args[2:end]
+                new_idxs = map(x -> x == t_sym ? idx_sym : x, idxs)
+                new_lhs = Expr(:ref, arr, new_idxs...)
+                return Expr(:(=), new_lhs, rewrite_lhs(rhs))
+            end
+        end
+        if e isa Expr
+            return Expr(e.head, map(rewrite_lhs, e.args)...)
+        end
+        return e
+    end
+
+    new_body = rewrite_lhs(body)
+
+    return quote
+        for $idx_sym in $iter
+            local $t_sym = $idx_sym.t
+            $new_body
+        end
+    end |> esc
+end
+
+"""
+    @with_interpolator Method src for t in axes(A, d)
+        body
+    end
+
+All reads from `src[t]` are rewritten to `interp(Method(), src, t)`,
+while writes like `A[t] = ...` are lowered to `A[idx] = ...` using
+the precomputed sample index from `DomainIdx`.
+"""
+macro with_interpolator(method, src, ex)
+    @assert ex.head === :for "Usage: @with_interpolator Method src for t in iter ... end"
+    loopvar, iter = ex.args[1], ex.args[2]
+    body = ex.args[3]
+
+    idx_sym = gensym(:idx)
+    t_sym   = loopvar
+    m_sym   = gensym(:method)
+
+    # Rewrite src[t] on RHS to interp(method, src, t)
+    function rewrite_reads(e)
+        if e isa Expr && e.head === :ref
+            arr = e.args[1]
+            idxs = e.args[2:end]
+            if arr == src && any(x -> x == t_sym, idxs)
+                return :(interp($m_sym, $arr, $t_sym))
+            end
+        end
+        if e isa Expr
+            return Expr(e.head, map(rewrite_reads, e.args)...)
+        end
+        return e
+    end
+
+    # Rewrite A[t] on LHS to A[idx_sym]
+    function rewrite_lhs(e)
+        if e isa Expr && e.head === :(=)
+            lhs, rhs = e.args
+            if lhs isa Expr && lhs.head === :ref
+                arr = lhs.args[1]
+                idxs = lhs.args[2:end]
+                new_idxs = map(x -> x == t_sym ? idx_sym : x, idxs)
+                new_lhs = Expr(:ref, arr, new_idxs...)
+                return Expr(:(=), new_lhs, rewrite_lhs(rhs))
+            end
+        end
+        if e isa Expr
+            return Expr(e.head, map(rewrite_lhs, e.args)...)
+        end
+        return e
+    end
+
+    body1 = rewrite_reads(body)
+    body2 = rewrite_lhs(body1)
+
+    return quote
+        local $m_sym = $(esc(method))()
+        for $idx_sym in $iter
+            local $t_sym = $idx_sym.t
+            $body2
+        end
+    end |> esc
+end
+
+end # module
