@@ -111,7 +111,7 @@ function Base.axes(D::AbstractDomainArray, d::Int)
     else
         idxs = sampleaxes(D, d)
         first_dom = D.offset[d] + (first(idxs)-1)/r
-        return DomainAxis{typeof(r),true}(length(idxs), first_dom)
+        return DomainAxis{r,true}(length(idxs), first_dom)
     end
 end
 
@@ -361,6 +361,9 @@ function Base.show(io::IO, ::MIME"text/plain", D::DomainView)
     Base.show(inner, MIME"text/plain"(), D.data)
 end
 
+########################
+# Dimension conversion #
+########################
 _to_triple(t::Tuple{<:Real,<:Real,<:Real}) = (t[1], t[2], t[3])
 _to_triple(t::Tuple{<:Real,<:Real})        = (t[1], t[2], 0.0)
 _to_triple(len::Integer)                   = (len, nothing, 0.0)
@@ -387,6 +390,10 @@ function _make_domainarray(f, T, dims::Tuple)
     return DomainArray(arr, tuple(rates...), tuple(offs...))
 end
 
+########################
+# Public constructors  #
+########################
+
 domainzeros(dims...) = _make_domainarray(zeros, Float64, dims)
 domainzeros(T::Type, dims...) = _make_domainarray(zeros, T, dims)
 
@@ -400,3 +407,14 @@ domainfill(value, dims...) = _make_domainarray((T,s...)->fill(value, s...), Floa
 domainfill(T::Type, value, dims...) = _make_domainarray((T,s...)->fill(value, s...), T, dims)
 
 domainfull = domainfill
+
+Base.oneunit(::Type{DomainIndex{R,Check}}) where {R,Check} = DomainIndex{R,Check}(1)
+Base.one(::Type{DomainIndex{R,Check}}) where {R,Check} = DomainIndex{R,Check}(1)
+Base.zero(::Type{DomainIndex{R,Check}}) where {R,Check} = DomainIndex{R,Check}(0)
+
+function Base.show(io::IO, ax::DomainAxis{R,Check}) where {R,Check}
+    first_t = ax.offset
+    last_t  = ax.offset + (ax.len - 1) / R
+    step_t  = 1 / R
+    print(io, "$(first_t):$(step_t):$(last_t) @$(R)")
+end
