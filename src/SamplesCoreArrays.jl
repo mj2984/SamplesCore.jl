@@ -101,6 +101,11 @@ _to_index_and_offset(x::Real, r::Real) =
 _to_index_and_offset(rng::AbstractRange{<:Real}, r::Real) =
     error("Real slicing is forbidden on domain dimensions. Use @domainround or DomainIndex.")
 
+# Treat integer indices as sample indices even on domain dims
+_to_index_and_offset(i::Integer, ::Real) = (i, 0.0)
+_to_index_and_offset(r::AbstractRange{<:Integer}, ::Real) = (r, 0.0)
+_to_index_and_offset(v::AbstractVector{<:Integer}, ::Real) = (v, 0.0)
+
 function _indices_and_offsets(rate, I)
     N = length(I)
     inds = ntuple(i -> nothing, N)
@@ -185,6 +190,12 @@ Base.:+(a::DomainIndex{R,Check}, n::Integer) where {R,Check} =
     DomainIndex{R,Check}(a.i + n)
 Base.:+(n::Integer, a::DomainIndex{R,Check}) where {R,Check} =
     DomainIndex{R,Check}(a.i + n)
+
+Base.:-(a::DomainIndex{R,Check}, n::Integer) where {R,Check} =
+    DomainIndex{R,Check}(a.i - n)
+
+Base.:-(n::Integer, a::DomainIndex{R,Check}) where {R,Check} =
+    DomainIndex{R,Check}(n - a.i)
 
 Base.oneunit(::Type{DomainIndex{R,Check}}) where {R,Check} = DomainIndex{R,Check}(1)
 Base.one(::Type{DomainIndex{R,Check}}) where {R,Check} = DomainIndex{R,Check}(1)
