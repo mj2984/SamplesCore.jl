@@ -10,6 +10,8 @@ struct TypedOrigin{O} end
 const DomainOffsetTypes = Union{Number,RelativeOrigin,TypedOrigin}
 struct SampleSpace end
 struct TypedDomainSpace{D} end
+const GenericDomainRateTypes = Union{Number,SampleSpace,TypedDomainSpace}
+const IntegerIndexTypes = Union{Integer,AbstractRange,CartesianIndex,AbstractArray{<:Integer}}
 # The fields are in sample space. (index, offset, even rate is in sample space for Domains to interpret!)
 struct DomainIndex{TIO<:DomainOffsetTypes,TIR,DomainOnlyI}
     origin_shift::TIO
@@ -31,7 +33,7 @@ struct DomainArray{T,N,A<:AbstractArray{T,N},Dims<:NTuple{N,DomainAxis}} <: Abst
 end
 Base.size(D::DomainArray) = size(D.data)
 Base.axes(D::DomainArray) = axes(D.data)
-function check_index_allowed(axis::DomainAxis{TAO,TAR,DomainOnlyA},idx::DomainIndex{TIO,TIR,DomainOnlyI}) where {TAO,TAR,TIO,TIR,DomainOnlyA,DomainOnlyI}
+@inline function check_index_allowed(axis::DomainAxis{TAO,TAR,DomainOnlyA},idx::DomainIndex{TIO,TIR,DomainOnlyI}) where {TAO,TAR,TIO,TIR,DomainOnlyA,DomainOnlyI}
     if axis.rate isa SampleSpace && DomainOnlyI
         error("Cannot use a domain-only index on a SampleSpace axis")
     end
@@ -40,18 +42,16 @@ function check_index_allowed(axis::DomainAxis{TAO,TAR,DomainOnlyA},idx::DomainIn
     end
     return true
 end
-check_index_allowed(axis::DomainAxis,::Colon) = true
-check_index_allowed(axis::DomainAxis{TAO,TAR,false}, idx::T) where {TAO,TAR,T<:Union{Integer,AbstractRange,CartesianIndex,AbstractArray{<:Integer}}} = true
-check_index_allowed(axis::DomainAxis{TAO,TAR,true},idx::T) where {TAO,TAR,T<:Union{Integer,AbstractRange,CartesianIndex,AbstractArray{<:Integer}}} =error("Index type $T forbidden on this axis (DomainOnly=true). Use DomainIndex instead.")
-function convert_index(axis::DomainAxis, idx)
+@inline check_index_allowed(axis::DomainAxis{TAO,TAR,false}, idx::T) where {TAO,TAR,T<:IntegerIndexTypes} = true
+@inline check_index_allowed(axis::DomainAxis{TAO,TAR,true}, idx::T) where {TAO,TAR,T<:IntegerIndexTypes} =error("Index type $T forbidden on this axis (DomainOnly=true). Use DomainIndex instead.")
+@inline function convert_index(axis::DomainAxis, idx::DomainIndex)
     check_index_allowed(axis, idx)
-    if idx isa DomainIndex
-        return NoInterpolationDomainIndexer(axis, idx)
-    elseif idx isa Colon
-        return Colon()
-    else
-        return idx
-    end
+    return convert_domain_index(axis, idx)
+end
+@inline convert_index(axis::DomainAxis, idx::Colon) = Colon()
+@inline function convert_index(axis::DomainAxis, idx::T) where {T<:IntegerIndexTypes}
+    check_index_allowed(axis,idx)
+    return idx
 end
 function Base.getindex(D::DomainArray, I...)
     length(I) == length(D.dims) ||
@@ -67,7 +67,7 @@ extract_origin(o::Number) = o
 rate_converter(rate::R) = rate # Allow arbitrary user-defined rate types (Unitful, Measurements, etc.)
 rate_converter(rate::SampleSpace) = 1
 rate_converter(rate::TypedDomainSpace{D}) = D
-function NoInterpolationDomainIndexer(axis::DomainAxis{TAO,TAR,DomainOnlyA},i::DomainIndex{TIO,TIR,DomainOnlyI}) where {TAO,TAR,TIO,TIR,DomainOnlyA,DomainOnlyI}
+function convert_domain_index(axis::DomainAxis{TAO,TAR,DomainOnlyA},i::DomainIndex{TIO,TIR,DomainOnlyI}) where {TAO<:DomainOffsetTypes,TAR<:GenericDomainRateTypes,TIO<:DomainOffsetTypes,TIR<:GenericDomainRateTypes,DomainOnlyA,DomainOnlyI}
     axis_rate, index_rate = rate_converter(axis.rate), rate_converter(i.rate)
     origin_axis, origin_index = extract_origin(axis.origin_shift), extract_origin(i.origin_shift)
     index = i.index
