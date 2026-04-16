@@ -2,7 +2,7 @@ module DomainArrays
 
 export RelativeOrigin, relativeorigin, TypedOrigin, DomainOffsetTypes,
        SampleSpace, samplespace, TypedDomainSpace, GenericDomainRateTypes,
-       DomainOnly, domainonly, FromDomainSpace, fromdomainspace,
+       DomainOnly, domainonly, ToSampleSpace, ToDomainSpace, to_sample_space, to_domain_space
        AbstractDomainArray, DomainArray, DomainIndex, DomainAxis,
        domainaxes, domainmap
 
@@ -11,7 +11,8 @@ struct TypedOrigin{O} end
 struct SampleSpace end
 struct TypedDomainSpace{D} end
 struct DomainOnly end
-struct FromDomainSpace end
+struct ToSampleSpace end
+struct ToDomainSpace end
 abstract type AbstractDomainArray{T,N} <: AbstractArray{T,N} end
 
 const DomainOffsetTypes = Union{Number,RelativeOrigin,TypedOrigin}
@@ -21,23 +22,26 @@ const IntegerIndexTypes = Union{Integer,AbstractRange,CartesianIndex,AbstractArr
 const relativeorigin = RelativeOrigin()
 const samplespace = SampleSpace()
 const domainonly = DomainOnly()
-const fromdomainspace = FromDomainSpace()
+const to_sample_space = ToSampleSpace()
+const to_domain_space = ToDomainSpace()
 
-extract_origin(::RelativeOrigin) = 0
-extract_origin(::TypedOrigin{O}) where {O} = O
-extract_origin(o::Number) = o
-rate_converter(rate::R) where {R} = rate # Allow arbitrary user-defined rate types (Unitful, Measurements, etc.)
-rate_converter(rate::SampleSpace) = 1
-rate_converter(::TypedDomainSpace{D}) where {D} = D
-origin_converter(::RelativeOrigin,rate) = relativeorigin
-origin_converter(::TypedOrigin{O},rate) where {O} = TypedOrigin{O*rate_converter(rate)}()
-origin_converter(origin_shift::T,rate) where {T<:Number} = T(origin_shift*rate_converter(rate))
-index_converter(index::Number,rate) = index * rate_converter(rate)
-function DomainIndexFromDomainSpaceHelper(index::T, origin_shift::TIO, rate) where {T,TIO<:DomainOffsetTypes}
-    converted_index = index_converter(index,rate)
-    converted_origin = origin_converter(origin_shift,rate)
-    if isinteger(converted_index)
-        return Int(converted_index),converted_origin
+interpret_origin(::RelativeOrigin) = 0
+interpret_origin(::TypedOrigin{O}) where {O} = O
+interpret_origin(o::Number) = o
+interpret_rate(rate::R) where {R} = rate # Allow arbitrary user-defined rate types (Unitful, Measurements, etc.)
+interpret_rate(rate::SampleSpace) = 1
+interpret_rate(::TypedDomainSpace{D}) where {D} = D
+interpret_origin(::ToSampleSpace,::RelativeOrigin,rate) = relativeorigin
+interpret_origin(::ToSampleSpace,::TypedOrigin{O},rate) where {O} = TypedOrigin{O*interpret_rate(rate)}()
+interpret_origin(::ToSampleSpace,origin::T,rate) where {T<:Number} = T(origin*interpret_rate(rate))
+interpret_origin(::ToDomainSpace,origin::DomainOffsetTypes,rate) = interpret_origin(origin)/interpret_rate(rate)
+interpret_index(::ToSampleSpace,index::Number,rate) = index * interpret_rate(rate)
+interpret_index(::ToDomainSpace,index::Number,rate) = index / interpret_rate(rate)
+function interpret_coordinate(::ToSampleSpace,index::T, origin::TIO, rate) where {T,TIO<:DomainOffsetTypes}
+    sample_index = interpret_index(to_sample_space,index,rate)
+    sample_origin = interpret_origin(to_sample_space,origin,rate)
+    if isinteger(sample_index)
+        return Int(sample_index),sample_origin
     else
         throw(ArgumentError("Domain-space index $index does not convert to an integer sample index"))
     end
@@ -46,22 +50,22 @@ end
 # The fields are in sample space. (index, offset, even rate is in sample space for Domains to interpret!)
 struct DomainIndex{TIO<:DomainOffsetTypes,TIR,DomainOnlyI}
     index::Int
-    origin_shift::TIO
+    origin::TIO
     rate::TIR
-    DomainIndex(index::Integer, origin_shift::TIO=relativeorigin, rate::TIR=samplespace) where {TIO<:DomainOffsetTypes,TIR} = new{TIO,TIR,false}(index, origin_shift, rate)
-    DomainIndex(::DomainOnly, index::Integer, origin_shift::TIO=relativeorigin, rate::TIR=samplespace) where {TIO<:DomainOffsetTypes,TIR} = new{TIO,TIR,true}(index, origin_shift, rate)
+    DomainIndex(index::Integer, origin::TIO=relativeorigin, rate::TIR=samplespace) where {TIO<:DomainOffsetTypes,TIR} = new{TIO,TIR,false}(index, origin, rate)
+    DomainIndex(::DomainOnly, index::Integer, origin::TIO=relativeorigin, rate::TIR=samplespace) where {TIO<:DomainOffsetTypes,TIR} = new{TIO,TIR,true}(index, origin, rate)
 end
-DomainIndex(::FromDomainSpace, index::T, origin_shift::TIO=relativeorigin, rate=samplespace) where {T,TIO<:DomainOffsetTypes} = DomainIndex(DomainIndexFromDomainSpaceHelper(index,origin_shift,rate)...,rate)
-DomainIndex(::FromDomainSpace, ::DomainOnly, index::T, origin_shift::TIO=relativeorigin, rate=samplespace) where {T,TIO<:DomainOffsetTypes} = DomainIndex(domainonly,DomainIndexFromDomainSpaceHelper(index,origin_shift,rate)...,rate)
+DomainIndex(::ToSampleSpace, index::T, origin::TIO=relativeorigin, rate=samplespace) where {T,TIO<:DomainOffsetTypes} = DomainIndex(interpret_coordinate(to_sample_space,index,origin,rate)...,rate)
+DomainIndex(::ToSampleSpace, ::DomainOnly, index::T, origin::TIO=relativeorigin, rate=samplespace) where {T,TIO<:DomainOffsetTypes} = DomainIndex(domainonly,interpret_coordinate(to_sample_space,index,origin,rate)...,rate)
 
 struct DomainAxis{TAO<:DomainOffsetTypes,TAR,DomainOnlyA}
-    origin_shift::TAO
+    origin::TAO
     rate::TAR
-    DomainAxis(origin_shift::TAO=relativeorigin,rate::TAR=samplespace) where {TAO<:DomainOffsetTypes,TAR} = new{TAO,TAR,false}(origin_shift,rate)
-    DomainAxis(::DomainOnly,origin_shift::TAO=relativeorigin,rate::TAR=samplespace) where {TAO<:DomainOffsetTypes,TAR} = new{TAO,TAR,true}(origin_shift,rate)
+    DomainAxis(origin::TAO=relativeorigin,rate::TAR=samplespace) where {TAO<:DomainOffsetTypes,TAR} = new{TAO,TAR,false}(origin,rate)
+    DomainAxis(::DomainOnly,origin::TAO=relativeorigin,rate::TAR=samplespace) where {TAO<:DomainOffsetTypes,TAR} = new{TAO,TAR,true}(origin,rate)
 end
-DomainAxis(::FromDomainSpace,origin_shift::TAO=relativeorigin,rate=samplespace) where {TAO<:DomainOffsetTypes} = DomainAxis(origin_converter(origin_shift,rate),rate)
-DomainAxis(::FromDomainSpace,::DomainOnly,origin_shift::TAO=relativeorigin,rate=samplespace) where {TAO<:DomainOffsetTypes} =  DomainAxis(domainonly,origin_converter(origin_shift,rate),rate)
+DomainAxis(::ToSampleSpace,origin::TAO=relativeorigin,rate=samplespace) where {TAO<:DomainOffsetTypes} = DomainAxis(interpret_origin(to_sample_space,origin,rate),rate)
+DomainAxis(::ToSampleSpace,::DomainOnly,origin::TAO=relativeorigin,rate=samplespace) where {TAO<:DomainOffsetTypes} =  DomainAxis(domainonly,interpret_origin(to_sample_space,origin,rate),rate)
 
 struct DomainArray{T,N,A<:AbstractArray{T,N},Dims<:NTuple{N,DomainAxis}} <: AbstractDomainArray{T,N}
     data::A
@@ -72,8 +76,16 @@ Base.size(A::DomainArray) = size(A.data)
 Base.axes(A::DomainArray) = axes(A.data)
 rate(A::DomainArray) = map(ax -> ax.rate, A.dims)
 rate(A::DomainArray, dim::Integer) = A.dims[dim].rate
-domainsize(A::DomainArray) = map((s, ax) -> s * rate_converter(ax.rate), size(A), A.dims)
-domainsize(A::DomainArray, dim::Integer) = size(A, dim) * rate_converter(A.dims[dim].rate)
+origin(A::DomainArray) = map(ax -> ax.origin, A.dims)
+origin(A::DomainArray, dim::Integer) = A.dims[dim].origin
+domainsize(A::DomainArray) = map((s, ax) -> s * interpret_rate(ax.rate), size(A), A.dims)
+domainsize(A::DomainArray, dim::Integer) = size(A, dim) * interpret_rate(A.dims[dim].rate)
+interpreted_rate(A::DomainArray) = map(ax -> interpret_rate(ax.rate), A.dims)
+interpreted_rate(A::DomainArray, dim::Integer) = interpret_rate(A.dims[dim].rate)
+interpreted_origin(A::DomainArray) = map(ax -> interpret_origin(ax.origin), A.dims)
+interpreted_origin(A::DomainArray, dim::Integer) = interpret_origin(A.dims[dim].origin)
+interpreted_origin(::ToDomainSpace,A::DomainArray) = map(ax -> interpret_origin(to_domain_space,ax.origin,ax.rate), A.dims)
+interpreted_origin(::ToDomainSpace,A::DomainArray, dim::Integer) = interpret_origin(to_domain_space,A.dims[dim].origin,A.dims[dim].rate)
 @inline function check_index_allowed(axis::DomainAxis{TAO,TAR,DomainOnlyA},idx::DomainIndex{TIO,TIR,DomainOnlyI}) where {TAO,TAR,TIO,TIR,DomainOnlyA,DomainOnlyI}
     if axis.rate isa SampleSpace && DomainOnlyI
         error("Cannot use a domain-only index on a SampleSpace axis")
@@ -103,8 +115,8 @@ function Base.getindex(D::DomainArray, I...)
 end
 
 function convert_domain_index(axis::DomainAxis{TAO,TAR,DomainOnlyA},i::DomainIndex{TIO,TIR,DomainOnlyI}) where {TAO<:DomainOffsetTypes,TAR<:GenericDomainRateTypes,TIO<:DomainOffsetTypes,TIR<:GenericDomainRateTypes,DomainOnlyA,DomainOnlyI}
-    axis_rate, index_rate = rate_converter(axis.rate), rate_converter(i.rate)
-    origin_axis, origin_index = extract_origin(axis.origin_shift), extract_origin(i.origin_shift)
+    axis_rate, index_rate = interpret_rate(axis.rate), interpret_rate(i.rate)
+    origin_axis, origin_index = interpret_origin(axis.origin), interpret_origin(i.origin)
     index = i.index
     if index_rate == axis_rate
         delta = origin_index - origin_axis
@@ -123,43 +135,79 @@ function convert_domain_index(axis::DomainAxis{TAO,TAR,DomainOnlyA},i::DomainInd
     end
 end
 
-normalize_sample_dim(n::Integer) = (n, DomainAxis())
-normalize_sample_dim(t::Tuple{<:Integer,DomainAxis}) = (t[1], t[2])
-normalize_sample_dim(t::Tuple{<:Integer,Vararg}) = (t[1], DomainAxis(t[2:end]...))
-normalize_sample_dim(::FromDomainSpace,n::T) where {T} = (ceil(Int,n), DomainAxis())
-normalize_sample_dim(::FromDomainSpace,t::Tuple{T,DomainAxis}) where {T} = (ceil(Int,t[1]*rate_converter(t[2].rate)),t[2])
-normalize_sample_dim(::FromDomainSpace,t::Tuple{T,Vararg}) where {T} = normalize_sample_dim(fromdomainspace,t[1],DomainAxis(fromdomainspace,t[2:end]...))
-normalize_sample_dims(dims...) = map(normalize_sample_dim, dims)
-normalize_sample_dims(::FromDomainSpace,dims...) = map(dim -> normalize_sample_dim(fromdomainspace,dim), dims)
+canonicalize_domain_dim(n::Integer) = (n, DomainAxis())
+canonicalize_domain_dim(t::Tuple{<:Integer,DomainAxis}) = (t[1], t[2])
+canonicalize_domain_dim(t::Tuple{<:Integer,Vararg}) = (t[1], DomainAxis(t[2:end]...))
+canonicalize_domain_dim(::ToSampleSpace,n::T) where {T} = (ceil(Int,n), DomainAxis())
+function canonicalize_domain_dim(::ToSampleSpace,t::Tuple{T,DomainAxis}) where {T}
+    axis = t[2]
+    size = ceil(Int,t[1]*interpret_rate(axis.rate))
+    return (size,axis)
+end
+canonicalize_domain_dim(::ToSampleSpace,t::Tuple{T,Vararg}) where {T} = canonicalize_domain_dim(to_sample_space,t[1],DomainAxis(to_sample_space,t[2:end]...))
 
-function DomainZeros(::Type{T}, dims_argument) where {T}
-    dims = normalize_sample_dims(dims_argument...)
-    sizes = map(first, dims)
-    axes  = map(last, dims)
-    data  = zeros(T, Tuple(sizes))
-    return DomainArray(data, Tuple(axes))
+function domainzeros end
+function domainones end
+
+for (fname, basefill) in ((:domainzeros, :zeros),(:domainones, :ones))
+    @eval begin
+        $fname(::Type{T}, dims...) where {T} = $fname(T, dims)
+        $fname(::ToSampleSpace, ::Type{T}, dims...) where {T} = $fname(to_sample_space, T, dims)
+        $fname(dims...) = $fname(Float64, dims)
+        $fname(::ToSampleSpace, dims...) = $fname(to_sample_space, Float64, dims)
+        function $fname(::Type{T}, dims::Tuple) where {T}
+            canonical_dims = map(canonicalize_domain_dim, dims)
+            return DomainArray($basefill(T, map(first, canonical_dims)),map(last, canonical_dims))
+        end
+        function $fname(::ToSampleSpace, ::Type{T}, dims::Tuple) where {T}
+            canonical_dims = map(d -> canonicalize_domain_dim(to_sample_space, d), dims)
+            return DomainArray($basefill(T, map(first, canonical_dims)),map(last, canonical_dims))
+        end
+    end
 end
 
-function DomainZeros(::FromDomainSpace,::Type{T}, dims_argument) where {T}
-    dims = normalize_sample_dims(fromdomainspace,dims_argument...)
-    sizes = map(first, dims)
-    axes  = map(last, dims)
-    data  = zeros(T, Tuple(sizes))
-    return DomainArray(data, Tuple(axes))
+pretty_origin(::RelativeOrigin, rate) = "_"
+pretty_origin(::TypedOrigin{O}, rate) where {O} = string(interpret_origin(to_domain_space, O, rate), "*")
+pretty_origin(o::Number, rate) = string(interpret_origin(to_domain_space, o, rate))
+
+pretty_rate(::SampleSpace) = "_"
+pretty_rate(::TypedDomainSpace{D}) where {D} = string(D, "*")
+pretty_rate(r::Number) = string(r)
+
+function Base.show(io::IO, ax::DomainAxis)
+    print(io, pretty_origin(ax.origin, ax.rate), ":", pretty_rate(ax.rate))
 end
-DomainZeros(::Type{T}, dims_argument...) where {T} = DomainZeros(T,dims_argument)
-DomainZeros(::FromDomainSpace,::Type{T}, dims_argument...) where {T} = DomainZeros(fromdomainspace,T,dims_argument)
+
+function Base.show(io::IO, ::MIME"text/plain", A::DomainArray)
+    # Domain metadata
+    ds = domainsize(A)
+    rs = map(ax -> pretty_rate(ax.rate), A.dims)
+    os = map(ax -> pretty_origin(ax.origin, ax.rate), A.dims)
+
+    # Header: size, origin, then array type and rate
+    print(io, "(")
+    print(io, join(ds, ", "))
+    print(io, ") DomainArray with origin (")
+    print(io, join(os, ", "))
+    print(io, ") @ (")
+    print(io, join(rs, ", "))
+    println(io, ")")
+
+    # Underlying array
+    inner = IOContext(io, :compact => true)
+    Base.show(inner, MIME"text/plain"(), A.data)
+end
 
 ############################
 # domainaxes
 ############################
-
-function domainaxes(D::DomainArray{T,N,A,Dims,DomainOnly}, dim::Int) where {T,N,A,Dims,DomainOnly}
+#=
+function domainaxes(D::DomainArray{T,N,A,Dims}, dim::Int) where {T,N,A,Dims,}
     len = size(D.data, dim)
     diminfo = D.dims[dim]
     rate   = diminfo.rate
     offset = diminfo.offset
-    return (DomainIndex{rate, typeof(offset), DomainOnly}(i, offset) for i in 1:len)
+    return (DomainIndex{rate, typeof(offset)}(i, offset) for i in 1:len)
 end
 
 function _broadcast_safe(D::DomainArray)
@@ -179,5 +227,5 @@ function broadcasted(f, D::DomainArray, A::AbstractArray)
     end
     return DomainArray(broadcast(f, D.data, A), D.dims)
 end
-
+=#
 end # module
