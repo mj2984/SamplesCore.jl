@@ -2,7 +2,7 @@ module SamplesCore
 using Base: size, axes, IndexStyle, getindex, setindex!, @propagate_inbounds, show, @view
 using Printf
 include("SamplesCoreArrays.jl")
-export AbstractDomainArray, DomainArray, DomainView, domainslice, domainview, domainview_extreme, @extreme_view, @sampleidx, domainzeros, domainones, domainrand, domainfill, domainaxis, domainaxes, domainsize, domainrange, domainextent
+#export AbstractDomainArray, DomainArray, DomainView, domainslice, domainview, domainview_extreme, @extreme_view, @sampleidx, domainzeros, domainones, domainrand, domainfill, domainaxis, domainaxes, domainsize, domainrange, domainextent
 using BitIntegers, FixedPointNumbers
 import Base: +, -, *, /, show, eltype, promote_rule, broadcastable, getproperty
 import Base: zero
