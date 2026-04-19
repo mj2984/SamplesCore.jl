@@ -1,10 +1,10 @@
-module DomainArrays
+#module DomainArrays
 
 export RelativeOrigin, relativeorigin, TypedOrigin, DomainOffsetTypes,
        SampleSpace, samplespace, TypedDomainSpace, GenericDomainRateTypes,
-       DomainOnly, domainonly, ToSampleSpace, ToDomainSpace, to_sample_space, to_domain_space
+       DomainOnly, domainonly, ToSampleSpace, ToDomainSpace, to_sample_space, to_domain_space,
        AbstractDomainArray, DomainArray, DomainIndex, DomainAxis,
-       domainaxes, domainmap
+       domainaxes, domainmap, domainzeros, relativeorigin, rate, interpret_rate, interpret_index, interpret_origin
 
 struct RelativeOrigin end
 struct TypedOrigin{O} end
@@ -78,8 +78,8 @@ rate(A::DomainArray) = map(ax -> ax.rate, A.dims)
 rate(A::DomainArray, dim::Integer) = A.dims[dim].rate
 origin(A::DomainArray) = map(ax -> ax.origin, A.dims)
 origin(A::DomainArray, dim::Integer) = A.dims[dim].origin
-domainsize(A::DomainArray) = map((s, ax) -> s * interpret_rate(ax.rate), size(A), A.dims)
-domainsize(A::DomainArray, dim::Integer) = size(A, dim) * interpret_rate(A.dims[dim].rate)
+domainsize(A::DomainArray) = map((s, ax) -> s / interpret_rate(ax.rate), size(A), A.dims)
+domainsize(A::DomainArray, dim::Integer) = size(A, dim) / interpret_rate(A.dims[dim].rate)
 interpreted_rate(A::DomainArray) = map(ax -> interpret_rate(ax.rate), A.dims)
 interpreted_rate(A::DomainArray, dim::Integer) = interpret_rate(A.dims[dim].rate)
 interpreted_origin(A::DomainArray) = map(ax -> interpret_origin(ax.origin), A.dims)
@@ -138,13 +138,13 @@ end
 canonicalize_domain_dim(n::Integer) = (n, DomainAxis())
 canonicalize_domain_dim(t::Tuple{<:Integer,DomainAxis}) = (t[1], t[2])
 canonicalize_domain_dim(t::Tuple{<:Integer,Vararg}) = (t[1], DomainAxis(t[2:end]...))
-canonicalize_domain_dim(::ToSampleSpace,n::T) where {T} = (ceil(Int,n), DomainAxis())
-function canonicalize_domain_dim(::ToSampleSpace,t::Tuple{T,DomainAxis}) where {T}
+canonicalize_domain_dim(rounding_method::F,::ToSampleSpace,n::T) where {T,F<:Function} = (rounding_method(n), DomainAxis())
+function canonicalize_domain_dim(rounding_method::F,::ToSampleSpace,t::Tuple{T,DomainAxis}) where {T, F<:Function}
     axis = t[2]
-    size = ceil(Int,t[1]*interpret_rate(axis.rate))
+    size = rounding_method(t[1]*interpret_rate(axis.rate))
     return (size,axis)
 end
-canonicalize_domain_dim(::ToSampleSpace,t::Tuple{T,Vararg}) where {T} = canonicalize_domain_dim(to_sample_space,t[1],DomainAxis(to_sample_space,t[2:end]...))
+canonicalize_domain_dim(rounding_method::F,::ToSampleSpace,t::Tuple{T,Vararg}) where {T,F<:Function} = canonicalize_domain_dim(rounding_method,to_sample_space,(t[1],DomainAxis(to_sample_space,t[2:end]...)))
 
 function domainzeros end
 function domainones end
@@ -152,19 +152,24 @@ function domainones end
 for (fname, basefill) in ((:domainzeros, :zeros),(:domainones, :ones))
     @eval begin
         $fname(::Type{T}, dims...) where {T} = $fname(T, dims)
-        $fname(::ToSampleSpace, ::Type{T}, dims...) where {T} = $fname(to_sample_space, T, dims)
+        $fname(rounding_method::F,::ToSampleSpace, ::Type{T}, dims...) where {T,F<:Function} = $fname(rounding_method,to_sample_space, T, dims)
         $fname(dims...) = $fname(Float64, dims)
-        $fname(::ToSampleSpace, dims...) = $fname(to_sample_space, Float64, dims)
+        $fname(rounding_method::F,::ToSampleSpace, dims...) where {F<:Function} = $fname(rounding_method,to_sample_space, Float64, dims)
+        $fname(::ToSampleSpace, args...) = $fname(x->ceil(Int,x),to_sample_space, args...)
         function $fname(::Type{T}, dims::Tuple) where {T}
             canonical_dims = map(canonicalize_domain_dim, dims)
             return DomainArray($basefill(T, map(first, canonical_dims)),map(last, canonical_dims))
         end
-        function $fname(::ToSampleSpace, ::Type{T}, dims::Tuple) where {T}
-            canonical_dims = map(d -> canonicalize_domain_dim(to_sample_space, d), dims)
+        function $fname(rounding_method::F,::ToSampleSpace, ::Type{T}, dims::Tuple) where {T,F<:Function}
+            canonical_dims = map(d -> canonicalize_domain_dim(rounding_method,to_sample_space, d), dims)
             return DomainArray($basefill(T, map(first, canonical_dims)),map(last, canonical_dims))
         end
     end
 end
+
+Base.similar(A::DomainArray) = DomainArray(similar(A.data), A.dims)
+Base.similar(A::DomainArray, ::Type{T}) where {T} = DomainArray(similar(A.data, T), A.dims)
+Base.similar(A::DomainArray{T,N,Data,Dims}, dims::NTuple{N,Integer}) where {T,N,Data,Dims} = DomainArray(similar(A.data, dims), A.dims)
 
 pretty_origin(::RelativeOrigin, rate) = "_"
 pretty_origin(::TypedOrigin{O}, rate) where {O} = string(interpret_origin(to_domain_space, O, rate), "*")
@@ -174,10 +179,7 @@ pretty_rate(::SampleSpace) = "_"
 pretty_rate(::TypedDomainSpace{D}) where {D} = string(D, "*")
 pretty_rate(r::Number) = string(r)
 
-function Base.show(io::IO, ax::DomainAxis)
-    print(io, pretty_origin(ax.origin, ax.rate), ":", pretty_rate(ax.rate))
-end
-
+Base.show(io::IO, ax::DomainAxis) = print(io, pretty_origin(ax.origin, ax.rate), ":", pretty_rate(ax.rate))
 function Base.show(io::IO, ::MIME"text/plain", A::DomainArray)
     # Domain metadata
     ds = domainsize(A)
@@ -196,7 +198,7 @@ function Base.show(io::IO, ::MIME"text/plain", A::DomainArray)
     # Underlying array
     inner = IOContext(io, :compact => true)
     Base.show(inner, MIME"text/plain"(), A.data)
-end
+#end
 
 ############################
 # domainaxes
