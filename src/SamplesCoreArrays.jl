@@ -64,7 +64,7 @@ function DomainIndex(rounding_method::F, index::DomainSpaceIndex{T}, axis::Domai
     sample_index = rounding_method((index.x/interpret_rate(axis.rate)) - interpret_origin(axis.origin))
     return DomainOnlyA ? DomainIndex(domainonly,sample_index,axis.origin,axis.rate) : DomainIndex(sample_index,axis.origin,axis.rate)
 end
-DomainIndex(index::DomainSpaceIndex{T}, axis::DomainAxis) where {T} = DomainIndex(x -> ceil(Int, x), index, axis)
+DomainIndex(index::DomainSpaceIndex{T}, axis::DomainAxis{TAO,TAR,DomainOnlyA}) where {T,TAO,TAR,DomainOnlyA} = DomainIndex(Int,index,axis)
 
 struct DomainAxis{TAO<:DomainOffsetTypes,TAR,DomainOnlyA}
     origin::TAO
@@ -114,6 +114,13 @@ end
     check_index_allowed(axis,idx)
     return idx
 end
+@inline convert_index(axis::DomainAxis, idx::DomainSpaceIndex) = convert_domain_index(axis,DomainIndex(x -> round(Int,x),idx,axis))
+@inline function convert_index(axis::DomainAxis,r::UnitRange{<:DomainSpaceIndex})
+    lo = convert_domain_index(axis,DomainIndex(x -> ceil(Int, x), first(r), axis))
+    hi = convert_domain_index(axis,DomainIndex(x -> floor(Int, x), last(r), axis))
+    return lo:hi
+end
+
 @inline convert_index(all_axis::NTuple{N,DomainAxis}, I::NTuple{N,Any}) where {N} = map(convert_index,all_axis,I)
 function compute_view_axes(all_axis::NTuple{N,DomainAxis}, I::NTuple{N,Any}) where {N}
     preserved_axes = DomainAxis[]
