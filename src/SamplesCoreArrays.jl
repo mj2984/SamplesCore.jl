@@ -66,6 +66,11 @@ struct DomainAxis{TAO<:DomainOffsetTypes,TAR,DomainOnlyA}
 end
 DomainAxis(::ToSampleSpace,origin::TAO=relativeorigin,rate=samplespace) where {TAO<:DomainOffsetTypes} = DomainAxis(interpret_origin(to_sample_space,origin,rate),rate)
 DomainAxis(::ToSampleSpace,::DomainOnly,origin::TAO=relativeorigin,rate=samplespace) where {TAO<:DomainOffsetTypes} =  DomainAxis(domainonly,interpret_origin(to_sample_space,origin,rate),rate)
+function DomainIndexRound(::ToSampleSpace, rounding_method::F, index::T, axis::DomainAxis{TAO,TAR,DomainOnlyA}) where {T,F,TAO,TAR,DomainOnlyA}
+    sample_index = rounding_method((index/interpret_rate(axis.rate)) - interpret_origin(axis.origin))
+    return DomainOnlyA ? DomainIndex(domainonly,sample_index,axis.origin,axis.rate) : DomainIndex(sample_index,axis.origin,axis.rate)
+end
+DomainIndexRound(::ToSampleSpace,index::T,axis::DomainAxis) = DomainIndexRound(to_sample_space,x->ceil(Int,x),index,axis)
 
 struct DomainArray{T,N,A<:AbstractArray{T,N},Dims<:NTuple{N,DomainAxis}} <: AbstractDomainArray{T,N}
     data::A
