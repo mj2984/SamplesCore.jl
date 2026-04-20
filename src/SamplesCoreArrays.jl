@@ -1,4 +1,4 @@
-module DomainArrays
+#module DomainArrays
 
 export RelativeOrigin, relativeorigin, TypedOrigin, DomainOffsetTypes,
        SampleSpace, samplespace, TypedDomainSpace, GenericDomainRateTypes,
@@ -81,6 +81,7 @@ DomainIndex(index::DomainSpaceIndex{T}, axis::DomainAxis{TAO,TAR,DomainOnlyA}) w
 DomainArray(data::AbstractArray{T,N}) where {T,N} = DomainArray(data, ntuple(_ -> DomainAxis(), N))
 Base.size(A::DomainArray) = size(A.data)
 Base.axes(A::DomainArray) = axes(A.data)
+Base.pointer(A::DomainArray) = pointer(A.data)
 rate(A::DomainArray) = map(ax -> ax.rate, A.dims)
 rate(A::DomainArray, dim::Integer) = A.dims[dim].rate
 origin(A::DomainArray) = map(ax -> ax.origin, A.dims)
@@ -284,4 +285,4 @@ function broadcasted(f, D::DomainArray, A::AbstractArray)
     return DomainArray(broadcast(f, D.data, A), D.dims)
 end
 =#
-end # module
+#end # module
