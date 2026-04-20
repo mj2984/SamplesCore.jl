@@ -1,4 +1,4 @@
-#module DomainArrays
+module DomainArrays
 
 export RelativeOrigin, relativeorigin, TypedOrigin, DomainOffsetTypes,
        SampleSpace, samplespace, TypedDomainSpace, GenericDomainRateTypes,
@@ -47,6 +47,9 @@ function interpret_coordinate(::ToSampleSpace,index::T, origin::TIO, rate) where
     end
 end
 
+struct DomainSpaceIndex{T}
+    x::T
+end
 # The fields are in sample space. (index, offset, even rate is in sample space for Domains to interpret!)
 struct DomainIndex{TIO<:DomainOffsetTypes,TIR,DomainOnlyI}
     index::Int
@@ -57,6 +60,11 @@ struct DomainIndex{TIO<:DomainOffsetTypes,TIR,DomainOnlyI}
 end
 DomainIndex(::ToSampleSpace, index::T, origin::TIO=relativeorigin, rate=samplespace) where {T,TIO<:DomainOffsetTypes} = DomainIndex(interpret_coordinate(to_sample_space,index,origin,rate)...,rate)
 DomainIndex(::ToSampleSpace, ::DomainOnly, index::T, origin::TIO=relativeorigin, rate=samplespace) where {T,TIO<:DomainOffsetTypes} = DomainIndex(domainonly,interpret_coordinate(to_sample_space,index,origin,rate)...,rate)
+function DomainIndex(rounding_method::F, index::DomainSpaceIndex{T}, axis::DomainAxis{TAO,TAR,DomainOnlyA}) where {T,F,TAO,TAR,DomainOnlyA}
+    sample_index = rounding_method((index.x/interpret_rate(axis.rate)) - interpret_origin(axis.origin))
+    return DomainOnlyA ? DomainIndex(domainonly,sample_index,axis.origin,axis.rate) : DomainIndex(sample_index,axis.origin,axis.rate)
+end
+DomainIndex(index::DomainSpaceIndex{T}, axis::DomainAxis) where {T} = DomainIndex(x -> ceil(Int, x), index, axis)
 
 struct DomainAxis{TAO<:DomainOffsetTypes,TAR,DomainOnlyA}
     origin::TAO
@@ -66,11 +74,6 @@ struct DomainAxis{TAO<:DomainOffsetTypes,TAR,DomainOnlyA}
 end
 DomainAxis(::ToSampleSpace,origin::TAO=relativeorigin,rate=samplespace) where {TAO<:DomainOffsetTypes} = DomainAxis(interpret_origin(to_sample_space,origin,rate),rate)
 DomainAxis(::ToSampleSpace,::DomainOnly,origin::TAO=relativeorigin,rate=samplespace) where {TAO<:DomainOffsetTypes} =  DomainAxis(domainonly,interpret_origin(to_sample_space,origin,rate),rate)
-function DomainIndexRound(::ToSampleSpace, rounding_method::F, index::T, axis::DomainAxis{TAO,TAR,DomainOnlyA}) where {T,F,TAO,TAR,DomainOnlyA}
-    sample_index = rounding_method((index/interpret_rate(axis.rate)) - interpret_origin(axis.origin))
-    return DomainOnlyA ? DomainIndex(domainonly,sample_index,axis.origin,axis.rate) : DomainIndex(sample_index,axis.origin,axis.rate)
-end
-DomainIndexRound(::ToSampleSpace,index::T,axis::DomainAxis) = DomainIndexRound(to_sample_space,x->ceil(Int,x),index,axis)
 
 struct DomainArray{T,N,A<:AbstractArray{T,N},Dims<:NTuple{N,DomainAxis}} <: AbstractDomainArray{T,N}
     data::A
@@ -271,4 +274,4 @@ function broadcasted(f, D::DomainArray, A::AbstractArray)
     return DomainArray(broadcast(f, D.data, A), D.dims)
 end
 =#
-#end # module
+end # module
