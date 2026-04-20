@@ -60,8 +60,9 @@ struct DomainIndex{TIO<:DomainOffsetTypes,TIR,DomainOnlyI}
 end
 DomainIndex(::ToSampleSpace, index::T, origin::TIO=relativeorigin, rate=samplespace) where {T,TIO<:DomainOffsetTypes} = DomainIndex(interpret_coordinate(to_sample_space,index,origin,rate)...,rate)
 DomainIndex(::ToSampleSpace, ::DomainOnly, index::T, origin::TIO=relativeorigin, rate=samplespace) where {T,TIO<:DomainOffsetTypes} = DomainIndex(domainonly,interpret_coordinate(to_sample_space,index,origin,rate)...,rate)
+compute_sample_index(rounding_method::F, index::DomainSpaceIndex{T}, axis::DomainAxis{TAO,TAR,DomainOnlyA}) where {T,F,TAO,TAR,DomainOnlyA} = rounding_method((index.x/interpret_rate(axis.rate)) - interpret_origin(axis.origin))
 function DomainIndex(rounding_method::F, index::DomainSpaceIndex{T}, axis::DomainAxis{TAO,TAR,DomainOnlyA}) where {T,F,TAO,TAR,DomainOnlyA}
-    sample_index = rounding_method((index.x/interpret_rate(axis.rate)) - interpret_origin(axis.origin))
+    sample_index = compute_sample_index(rounding_method,index,axis)
     return DomainOnlyA ? DomainIndex(domainonly,sample_index,axis.origin,axis.rate) : DomainIndex(sample_index,axis.origin,axis.rate)
 end
 DomainIndex(index::DomainSpaceIndex{T}, axis::DomainAxis{TAO,TAR,DomainOnlyA}) where {T,TAO,TAR,DomainOnlyA} = DomainIndex(Int,index,axis)
@@ -105,48 +106,6 @@ interpreted_origin(::ToDomainSpace,A::DomainArray, dim::Integer) = interpret_ori
 end
 @inline check_index_allowed(axis::DomainAxis{TAO,TAR,false}, idx::T) where {TAO,TAR,T<:IntegerIndexTypes} = true
 @inline check_index_allowed(axis::DomainAxis{TAO,TAR,true}, idx::T) where {TAO,TAR,T<:IntegerIndexTypes} = error("Index type $T forbidden on this axis (DomainOnly=true). Use DomainIndex instead.")
-@inline function convert_index(axis::DomainAxis, idx::DomainIndex)
-    check_index_allowed(axis, idx)
-    return convert_domain_index(axis, idx)
-end
-@inline convert_index(axis::DomainAxis, idx::Colon) = Colon()
-@inline function convert_index(axis::DomainAxis, idx::T) where {T<:IntegerIndexTypes}
-    check_index_allowed(axis,idx)
-    return idx
-end
-@inline convert_index(axis::DomainAxis, idx::DomainSpaceIndex) = convert_domain_index(axis,DomainIndex(x -> round(Int,x),idx,axis))
-@inline function convert_index(axis::DomainAxis,r::UnitRange{<:DomainSpaceIndex})
-    lo = convert_domain_index(axis,DomainIndex(x -> ceil(Int, x), first(r), axis))
-    hi = convert_domain_index(axis,DomainIndex(x -> floor(Int, x), last(r), axis))
-    return lo:hi
-end
-
-@inline convert_index(all_axis::NTuple{N,DomainAxis}, I::NTuple{N,Any}) where {N} = map(convert_index,all_axis,I)
-function compute_view_axes(all_axis::NTuple{N,DomainAxis}, I::NTuple{N,Any}) where {N}
-    preserved_axes = DomainAxis[]
-    for (axis_index, index) in enumerate(I)
-        if index isa Integer
-            continue # dimension removed
-        else
-            push!(preserved_axes, all_axis[axis_index])
-        end
-    end
-    return Tuple(preserved_axes)
-end
-@inline function _require_matching_ndims(A, I)
-    nd = length(A.dims)
-    ni = length(I)
-    nd == ni || throw(DimensionMismatch("Expected $nd indices, got $ni"))
-end
-function Base.view(D::DomainArray, I...)
-    _require_matching_ndims(D, I)
-    DomainArray(view(D.data, convert_index(D.dims, I)...), compute_view_axes(D.dims, I))
-end
-function Base.getindex(D::DomainArray, I...)
-    _require_matching_ndims(D, I)
-    DomainArray(getindex(D.data, convert_index(D.dims, I)...), compute_view_axes(D.dims, I))
-end
-
 function convert_domain_index(axis::DomainAxis{TAO,TAR,DomainOnlyA},i::DomainIndex{TIO,TIR,DomainOnlyI}) where {TAO<:DomainOffsetTypes,TAR<:GenericDomainRateTypes,TIO<:DomainOffsetTypes,TIR<:GenericDomainRateTypes,DomainOnlyA,DomainOnlyI}
     axis_rate, index_rate = interpret_rate(axis.rate), interpret_rate(i.rate)
     origin_axis, origin_index = interpret_origin(axis.origin), interpret_origin(i.origin)
@@ -165,6 +124,52 @@ function convert_domain_index(axis::DomainAxis{TAO,TAR,DomainOnlyA},i::DomainInd
         else
             error("DomainIndex does not map exactly to a sample index")
         end
+    end
+end
+@inline function convert_index(axis::DomainAxis, idx::DomainIndex)
+    check_index_allowed(axis, idx)
+    return convert_domain_index(axis, idx)
+end
+@inline convert_index(axis::DomainAxis, idx::Colon) = Colon()
+@inline function convert_index(axis::DomainAxis, idx::T) where {T<:IntegerIndexTypes}
+    check_index_allowed(axis,idx)
+    return idx
+end
+@inline convert_index(axis::DomainAxis, idx::DomainSpaceIndex) = compute_sample_index(x->round(Int,x),idx,axis)
+@inline function convert_index(axis::DomainAxis,r::UnitRange{<:DomainSpaceIndex})
+    lo = compute_sample_index(x -> ceil(Int, x),first(r),axis)
+    hi = compute_sample_index(x -> floor(Int, x),last(r),axis)
+    return lo:hi
+end
+@inline convert_index(all_axis::NTuple{N,DomainAxis}, I::NTuple{N,Any}) where {N} = map(convert_index,all_axis,I)
+function compute_view_axes(all_axis::NTuple{N,DomainAxis}, I::NTuple{N,Any}) where {N}
+    preserved_axes = DomainAxis[]
+    for (axis_index, index) in enumerate(I)
+        if index isa Integer || index isa DomainSpaceIndex
+            continue # dimension removed
+        else
+            push!(preserved_axes, all_axis[axis_index])
+        end
+    end
+    return Tuple(preserved_axes)
+end
+@inline function _require_matching_ndims(A, I)
+    nd = length(A.dims)
+    ni = length(I)
+    nd == ni || throw(DimensionMismatch("Expected $nd indices, got $ni"))
+end
+function Base.view(D::DomainArray, I...)
+    _require_matching_ndims(D, I)
+    DomainArray(view(D.data, convert_index(D.dims, I)...), compute_view_axes(D.dims, I))
+end
+function Base.getindex(D::DomainArray, I...)
+    _require_matching_ndims(D, I)
+    idxs = convert_index(D.dims, I)
+    val = getindex(D.data, idxs...)
+    if val isa AbstractArray
+        DomainArray(val, compute_view_axes(D.dims, I))
+    else
+        val
     end
 end
 
