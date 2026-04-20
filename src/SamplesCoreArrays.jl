@@ -24,7 +24,6 @@ const samplespace = SampleSpace()
 const domainonly = DomainOnly()
 const to_sample_space = ToSampleSpace()
 const to_domain_space = ToDomainSpace()
-UnitRange
 interpret_origin(::RelativeOrigin) = 0
 interpret_origin(::TypedOrigin{O}) where {O} = O
 interpret_origin(o::Number) = o
